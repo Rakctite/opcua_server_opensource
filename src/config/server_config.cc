@@ -1,7 +1,5 @@
 #include "config/server_config.h"
 
-#include <algorithm>
-
 namespace opcua {
 
 ServerConfig ServerConfig::Default() {
@@ -32,7 +30,7 @@ Status ServerConfig::Validate() const {
   if (server_bind_address.empty()) {
     return Status::Error("server.bind_address must not be empty");
   }
-  if (server_port == 0) {
+  if (server_port < 1 || server_port > 65535) {
     return Status::Error("server.port must be between 1 and 65535");
   }
   if (server_endpoint_path.empty() || server_endpoint_path[0] != '/') {
@@ -55,7 +53,9 @@ Status ServerConfig::Validate() const {
       logging_level != "error") {
     return Status::Error("logging.level is invalid");
   }
-  if (logging_target != "stdout" && logging_target.rfind("file:", 0) != 0) {
+  if (logging_target != "stdout" &&
+      (logging_target.rfind("file:", 0) != 0 ||
+       logging_target.size() == std::string("file:").size())) {
     return Status::Error("logging.target must be stdout or file:<path>");
   }
   if (address_space_mode != "builtin") {

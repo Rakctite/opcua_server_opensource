@@ -1,7 +1,6 @@
 #ifndef OPCUA_SERVER_SRC_CONFIG_SERVER_CONFIG_H_
 #define OPCUA_SERVER_SRC_CONFIG_SERVER_CONFIG_H_
 
-#include <cstdint>
 #include <string>
 
 #include "common/result.h"
@@ -12,7 +11,7 @@ struct ServerConfig {
   std::string server_application_name;
   std::string server_product_uri;
   std::string server_bind_address;
-  uint16_t server_port;
+  int server_port;
   std::string server_endpoint_path;
   std::string security_mode;
   std::string security_policy;

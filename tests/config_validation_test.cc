@@ -25,6 +25,9 @@ int main() {
   invalid_port.server_port = 0;
   if (int rc = Expect(!invalid_port.Validate().ok(), "port 0 should fail validation")) return rc;
 
+  invalid_port.server_port = 70000;
+  if (int rc = Expect(!invalid_port.Validate().ok(), "port 70000 should fail validation")) return rc;
+
   auto invalid_address_space = defaults;
   invalid_address_space.address_space_mode = "nodeset";
   if (int rc = Expect(!invalid_address_space.Validate().ok(), "nodeset mode should not be enabled in v1")) return rc;
@@ -32,6 +35,9 @@ int main() {
   auto invalid_logging = defaults;
   invalid_logging.logging_target = "network";
   if (int rc = Expect(!invalid_logging.Validate().ok(), "invalid logging target should fail")) return rc;
+
+  invalid_logging.logging_target = "file:";
+  if (int rc = Expect(!invalid_logging.Validate().ok(), "empty file logging target should fail")) return rc;
 
   return 0;
 }
