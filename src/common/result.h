@@ -3,6 +3,7 @@
 
 #include <string>
 #include <utility>
+#include <variant>
 
 namespace opcua {
 
@@ -27,18 +28,35 @@ class Status {
 template <typename T>
 class Result {
  public:
-  Result(T value) : ok_(true), value_(std::move(value)) {}
-  Result(Status status) : ok_(false), status_(std::move(status)) {}
+  Result(T value) : storage_(std::move(value)) {}
+  Result(Status status) : storage_(NormalizeErrorStatus(std::move(status))) {}
 
-  bool ok() const { return ok_; }
-  const T& value() const { return value_; }
-  T& value() { return value_; }
-  const Status& status() const { return status_; }
+  static Result Error(Status status) { return Result(std::move(status)); }
+
+  bool ok() const { return std::holds_alternative<T>(storage_); }
+  const T& value() const { return std::get<T>(storage_); }
+  T& value() { return std::get<T>(storage_); }
+  const Status& status() const {
+    if (ok()) {
+      return OkStatus();
+    }
+    return std::get<Status>(storage_);
+  }
 
  private:
-  bool ok_;
-  T value_{};
-  Status status_ = Status::Ok();
+  static Status NormalizeErrorStatus(Status status) {
+    if (status.ok()) {
+      return Status::Error("Result error constructed with OK status");
+    }
+    return status;
+  }
+
+  static const Status& OkStatus() {
+    static const Status ok_status = Status::Ok();
+    return ok_status;
+  }
+
+  std::variant<T, Status> storage_;
 };
 
 }  // namespace opcua
