@@ -15,12 +15,22 @@ include(CompilerWarnings)
 add_library(opcua_common INTERFACE)
 target_include_directories(opcua_common INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+add_library(open62541_static STATIC third_party/open62541/open62541.c)
+target_include_directories(open62541_static PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/open62541")
+if(WIN32)
+  target_compile_options(open62541_static PRIVATE "$<$<C_COMPILER_ID:MSVC>:/utf-8>")
+  target_link_libraries(open62541_static PUBLIC ws2_32 iphlpapi)
+endif()
+
+add_library(cpp_httplib INTERFACE)
+target_include_directories(cpp_httplib INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cpp-httplib")
+
 add_executable(opcua-daemon apps/opcua-daemon/main.cc)
-target_link_libraries(opcua-daemon PRIVATE opcua_common)
+target_link_libraries(opcua-daemon PRIVATE opcua_common open62541_static)
 opcua_target_warnings(opcua-daemon)
 
 add_executable(opcua-supervisor apps/opcua-supervisor/main.cc)
-target_link_libraries(opcua-supervisor PRIVATE opcua_common)
+target_link_libraries(opcua-supervisor PRIVATE opcua_common cpp_httplib)
 opcua_target_warnings(opcua-supervisor)
 
 if(OPCUA_BUILD_TESTS)
