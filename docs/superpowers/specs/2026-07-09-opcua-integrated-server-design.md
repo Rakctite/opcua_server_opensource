@@ -17,6 +17,7 @@ opcua-server container
     - Provides the Web API through cpp-httplib
     - Reads and writes SQLite configuration
     - Starts, stops, restarts, and monitors opcua-daemon
+    - Reaps child processes and forwards shutdown signals
     - Exposes daemon status through API endpoints
 
   opcua-daemon
@@ -27,6 +28,8 @@ opcua-server container
 ```
 
 `opcua-supervisor` and `opcua-daemon` are separate processes but are shipped in the same image. This keeps local Docker deployment simple and avoids giving a Web API container access to the Docker socket or an external orchestrator API.
+
+Because `opcua-supervisor` runs as PID 1 in the container, it must implement process supervision responsibilities directly. It must reap terminated child processes with `wait` or `waitpid` so daemon exits do not leave zombie processes. On container shutdown, the supervisor must handle `SIGTERM`, forward a shutdown signal to `opcua-daemon`, wait for graceful termination, and then force termination only after a configured timeout.
 
 ## Configuration Model
 
@@ -43,6 +46,8 @@ API client
 ```
 
 This keeps OPC UA endpoint, security, limits, and address-space setup deterministic. It also avoids runtime mutation of open62541 server state for the first implementation.
+
+SQLite must be configured for predictable concurrent access between supervisor writes and daemon startup reads. The configuration database should enable WAL mode and set a `sqlite3_busy_timeout()` value on each connection. Configuration writes should happen in transactions so the daemon either reads the previous complete configuration or the new complete configuration, never a partial update.
 
 ## Initial API
 
@@ -67,6 +72,7 @@ The first version stores only server-level configuration in SQLite.
 ```text
 server.application_name
 server.product_uri
+server.bind_address
 server.port
 server.endpoint_path
 security.mode
@@ -74,11 +80,14 @@ security.policy
 limits.max_sessions
 limits.max_subscriptions
 logging.level
+logging.target
 address_space.mode
 address_space.path
 ```
 
 `address_space.mode = builtin` is the only required address-space implementation in the first version. `address_space.path` is included so a later `nodeset` mode can be added without changing the high-level configuration contract.
+
+`server.bind_address` defaults to `0.0.0.0` for container deployment. `logging.target` defaults to `stdout`; file logging can be supported where the configured path is writable, but stdout remains the container-first default.
 
 Node CRUD, namespace editing, certificate management, and user management are out of scope for the first version.
 
@@ -96,12 +105,15 @@ Dependencies:
 
 The OPC UA performance path must avoid unnecessary abstraction and runtime allocation. Web API convenience must not leak into daemon hot paths.
 
+open62541 should be exposed to the rest of the project as a CMake `STATIC` library target, even when using the common amalgamated `open62541.c` and `open62541.h` form. This keeps compile options, include paths, and dependencies isolated from application targets.
+
 ## Coding Rules
 
 The C++ code should follow C++ Core Guidelines as far as practical:
 
 - Use RAII for ownership and cleanup.
 - Keep C API handles behind small wrapper types.
+- Wrap open62541 resources with narrow RAII helpers where ownership rules are non-trivial.
 - Prefer explicit lifetimes and narrow interfaces.
 - Avoid global mutable state except where required by process-level signal handling.
 - Keep error paths explicit and testable.
@@ -148,8 +160,11 @@ Daemon lifecycle operations return explicit status:
 - stop timed out
 - restart failed
 - database unavailable
+- crashed
 
 The supervisor should track the latest daemon process state and exit code. The daemon should fail fast on invalid startup configuration and log the reason before exiting.
+
+If a new configuration causes daemon startup to fail, the supervisor must not hide the failure. `GET /api/v1/status` should report a crashed state, the last exit code or signal, and enough diagnostic text to identify the startup failure. The first implementation may keep a bounded in-memory tail of daemon stderr/stdout for status reporting.
 
 ## Testing Strategy
 
@@ -157,11 +172,14 @@ Initial tests should cover:
 
 - SQLite schema creation and migration.
 - Default configuration insertion.
+- WAL and busy timeout initialization.
 - Config validation.
 - Config read/write round trip.
 - Supervisor process controller behavior.
+- Child process reaping and shutdown signal forwarding.
 - Web API endpoint behavior.
 - Daemon startup smoke test using a temporary SQLite database.
+- Crashed daemon status reporting.
 
 Docker smoke testing can be added after the native executables work reliably.
 
