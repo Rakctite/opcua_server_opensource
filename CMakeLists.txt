@@ -24,6 +24,7 @@ endif()
 
 add_library(cpp_httplib INTERFACE)
 target_include_directories(cpp_httplib INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cpp-httplib")
+target_link_libraries(cpp_httplib INTERFACE "$<$<PLATFORM_ID:Windows>:ws2_32>")
 
 add_executable(opcua-daemon apps/opcua-daemon/main.cc)
 target_link_libraries(opcua-daemon PRIVATE opcua_common open62541_static)
