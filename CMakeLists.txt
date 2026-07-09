@@ -15,6 +15,20 @@ include(CompilerWarnings)
 add_library(opcua_common INTERFACE)
 target_include_directories(opcua_common INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+add_library(sqlite3_static STATIC third_party/sqlite/sqlite3.c)
+target_include_directories(sqlite3_static PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite")
+if(UNIX)
+  target_link_libraries(sqlite3_static PUBLIC dl pthread)
+endif()
+
+add_library(opcua_config
+  src/config/server_config.cc
+  src/config/sqlite_db.cc
+  src/config/config_repository.cc
+)
+target_link_libraries(opcua_config PUBLIC opcua_common sqlite3_static)
+opcua_target_warnings(opcua_config)
+
 add_library(open62541_static STATIC third_party/open62541/open62541.c)
 target_include_directories(open62541_static PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/open62541")
 if(WIN32)
@@ -38,9 +52,13 @@ if(OPCUA_BUILD_TESTS)
   enable_testing()
   add_executable(config_validation_test
     tests/config_validation_test.cc
-    src/config/server_config.cc
   )
-  target_link_libraries(config_validation_test PRIVATE opcua_common)
+  target_link_libraries(config_validation_test PRIVATE opcua_config)
   opcua_target_warnings(config_validation_test)
   add_test(NAME config_validation_test COMMAND config_validation_test)
+
+  add_executable(config_repository_test tests/config_repository_test.cc)
+  target_link_libraries(config_repository_test PRIVATE opcua_config)
+  opcua_target_warnings(config_repository_test)
+  add_test(NAME config_repository_test COMMAND config_repository_test)
 endif()
