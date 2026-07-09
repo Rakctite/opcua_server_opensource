@@ -44,6 +44,12 @@ add_library(opcua_daemon_lib
 target_link_libraries(opcua_daemon_lib PUBLIC opcua_common opcua_config open62541_static)
 opcua_target_warnings(opcua_daemon_lib)
 
+add_library(opcua_supervisor_lib
+  src/supervisor/process_controller.cc
+)
+target_link_libraries(opcua_supervisor_lib PUBLIC opcua_common opcua_config)
+opcua_target_warnings(opcua_supervisor_lib)
+
 add_library(cpp_httplib INTERFACE)
 target_include_directories(cpp_httplib INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cpp-httplib")
 target_link_libraries(cpp_httplib INTERFACE "$<$<PLATFORM_ID:Windows>:ws2_32>")
@@ -74,4 +80,14 @@ if(OPCUA_BUILD_TESTS)
   target_link_libraries(daemon_smoke_test PRIVATE opcua_daemon_lib)
   opcua_target_warnings(daemon_smoke_test)
   add_test(NAME daemon_smoke_test COMMAND daemon_smoke_test)
+
+  add_executable(test_child tests/test_child/main.cc)
+  opcua_target_warnings(test_child)
+
+  add_executable(process_controller_test tests/process_controller_test.cc)
+  target_link_libraries(process_controller_test PRIVATE opcua_supervisor_lib)
+  opcua_target_warnings(process_controller_test)
+  add_test(NAME process_controller_test
+    COMMAND process_controller_test $<TARGET_FILE:test_child>
+  )
 endif()
