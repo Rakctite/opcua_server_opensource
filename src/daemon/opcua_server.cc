@@ -34,6 +34,28 @@ Status StatusFromOpen62541(UA_StatusCode code, const char* operation) {
   return Status::Error(std::string(operation) + " failed: " + UA_StatusCode_name(code));
 }
 
+class ServerShutdown {
+ public:
+  explicit ServerShutdown(UA_Server* server) : server_(server) {}
+
+  ServerShutdown(const ServerShutdown&) = delete;
+  ServerShutdown& operator=(const ServerShutdown&) = delete;
+
+  ~ServerShutdown() { Shutdown(); }
+
+  Status Shutdown() {
+    if (server_ != nullptr) {
+      shutdown_status_ = UA_Server_run_shutdown(server_);
+      server_ = nullptr;
+    }
+    return StatusFromOpen62541(shutdown_status_, "UA_Server_run_shutdown");
+  }
+
+ private:
+  UA_Server* server_;
+  UA_StatusCode shutdown_status_ = UA_STATUSCODE_GOOD;
+};
+
 }  // namespace
 
 OpcuaServer::OpcuaServer(ServerConfig config) : config_(std::move(config)) {}
@@ -66,16 +88,18 @@ Status OpcuaServer::Run(std::atomic_bool* running) {
     return config_status;
   }
 
-  while (running->load()) {
-    auto iterate_status = StatusFromOpen62541(
-        UA_Server_run_iterate(server.get(), true),
-        "UA_Server_run_iterate");
-    if (!iterate_status.ok()) {
-      return iterate_status;
-    }
+  auto startup_status = StatusFromOpen62541(UA_Server_run_startup(server.get()),
+                                            "UA_Server_run_startup");
+  if (!startup_status.ok()) {
+    return startup_status;
   }
 
-  return Status::Ok();
+  ServerShutdown shutdown(server.get());
+  while (running->load()) {
+    UA_Server_run_iterate(server.get(), true);
+  }
+
+  return shutdown.Shutdown();
 }
 
 }  // namespace opcua

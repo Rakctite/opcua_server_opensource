@@ -2,9 +2,12 @@
 #include "daemon/opcua_server.h"
 
 #include <atomic>
+#include <array>
+#include <chrono>
 #include <cstdio>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace {
@@ -38,6 +41,21 @@ class DatabaseCleanup {
   std::string db_path_;
 };
 
+opcua::Status RunServerBriefly(const opcua::ServerConfig& config) {
+  opcua::OpcuaServer server(config);
+  std::atomic_bool running(true);
+  opcua::Status run_status = opcua::Status::Ok();
+  std::thread server_thread([&server, &running, &run_status]() {
+    run_status = server.Run(&running);
+  });
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  running.store(false);
+  server_thread.join();
+
+  return run_status;
+}
+
 }  // namespace
 
 int main() {
@@ -54,10 +72,31 @@ int main() {
   auto config_result = repo.Load();
   if (int rc = Expect(config_result.ok(), config_result.status().message().c_str())) return rc;
 
-  opcua::OpcuaServer server(config_result.value());
-  std::atomic_bool running(false);
-  auto run_status = server.Run(&running);
-  if (int rc = Expect(run_status.ok(), run_status.message().c_str())) return rc;
+  const std::array<int, 5> test_ports = {48400, 48401, 48402, 48403, 48404};
+  opcua::Status last_run_status = opcua::Status::Error("server did not run");
+  for (const int port : test_ports) {
+    auto config = config_result.value();
+    config.server_port = port;
+    auto save_status = repo.Save(config);
+    if (int rc = Expect(save_status.ok(), save_status.message().c_str())) return rc;
 
-  return 0;
+    auto loaded_config_result = repo.Load();
+    if (int rc = Expect(loaded_config_result.ok(),
+                        loaded_config_result.status().message().c_str())) {
+      return rc;
+    }
+    if (int rc = Expect(loaded_config_result.value().server_port == port,
+                        "daemon smoke config did not persist test port")) {
+      return rc;
+    }
+
+    last_run_status = RunServerBriefly(loaded_config_result.value());
+    if (last_run_status.ok()) {
+      return 0;
+    }
+    std::cerr << "daemon smoke failed on port " << port << ": "
+              << last_run_status.message() << "\n";
+  }
+
+  return Expect(false, last_run_status.message().c_str());
 }

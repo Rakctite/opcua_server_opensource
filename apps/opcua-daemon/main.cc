@@ -1,17 +1,19 @@
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <iostream>
 #include <string>
+#include <thread>
 
 #include "config/config_repository.h"
 #include "daemon/opcua_server.h"
 
 namespace {
 
-std::atomic_bool g_running(true);
+volatile std::sig_atomic_t g_shutdown_requested = 0;
 
 void HandleShutdownSignal(int /*signal*/) {
-  g_running.store(false);
+  g_shutdown_requested = 1;
 }
 
 int PrintError(const opcua::Status& status) {
@@ -44,7 +46,17 @@ int main(int argc, char* argv[]) {
   }
 
   opcua::OpcuaServer server(config_result.value());
-  auto run_status = server.Run(&g_running);
+  std::atomic_bool running(true);
+  std::thread signal_monitor([&running]() {
+    while (running.load() && g_shutdown_requested == 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    running.store(false);
+  });
+
+  auto run_status = server.Run(&running);
+  running.store(false);
+  signal_monitor.join();
   if (!run_status.ok()) {
     return PrintError(run_status);
   }
