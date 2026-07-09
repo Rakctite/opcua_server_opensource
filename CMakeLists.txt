@@ -36,4 +36,11 @@ opcua_target_warnings(opcua-supervisor)
 
 if(OPCUA_BUILD_TESTS)
   enable_testing()
+  add_executable(config_validation_test
+    tests/config_validation_test.cc
+    src/config/server_config.cc
+  )
+  target_link_libraries(config_validation_test PRIVATE opcua_common)
+  opcua_target_warnings(config_validation_test)
+  add_test(NAME config_validation_test COMMAND config_validation_test)
 endif()
