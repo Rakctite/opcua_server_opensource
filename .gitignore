@@ -1,1 +1,10 @@
 .worktrees/
+build/
+out/
+.vs/
+.vscode/
+*.user
+*.db
+*.db-shm
+*.db-wal
+*.log
