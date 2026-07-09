@@ -26,6 +26,11 @@ class ProcessController {
   ProcessController(std::string executable_path, std::vector<std::string> args);
   ~ProcessController();
 
+  ProcessController(const ProcessController&) = delete;
+  ProcessController& operator=(const ProcessController&) = delete;
+  ProcessController(ProcessController&&) = delete;
+  ProcessController& operator=(ProcessController&&) = delete;
+
   Status Start();
   Status Stop(std::chrono::milliseconds timeout);
   Status Restart(std::chrono::milliseconds timeout);

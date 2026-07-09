@@ -162,18 +162,19 @@ Status ProcessController::Start() {
   CloseHandle(process_info.hThread);
   process_handle_ = process_info.hProcess;
 #else
+  std::vector<char*> argv;
+  argv.reserve(args_.size() + 2);
+  argv.push_back(const_cast<char*>(executable_path_.c_str()));
+  for (const auto& arg : args_) {
+    argv.push_back(const_cast<char*>(arg.c_str()));
+  }
+  argv.push_back(nullptr);
+
   const pid_t pid = fork();
   if (pid < 0) {
     return Status::Error(ErrnoMessage("fork"));
   }
   if (pid == 0) {
-    std::vector<char*> argv;
-    argv.reserve(args_.size() + 2);
-    argv.push_back(const_cast<char*>(executable_path_.c_str()));
-    for (const auto& arg : args_) {
-      argv.push_back(const_cast<char*>(arg.c_str()));
-    }
-    argv.push_back(nullptr);
     execv(executable_path_.c_str(), argv.data());
     _exit(127);
   }
@@ -194,21 +195,20 @@ Status ProcessController::Stop(std::chrono::milliseconds timeout) {
 
 #if defined(_WIN32)
   const auto timeout_ms = timeout.count() < 0 ? 0 : timeout.count();
+  // Task 8 will add graceful container/signal behavior. For Task 6, the
+  // Windows controller terminates first, then waits for process cleanup.
+  if (TerminateProcess(static_cast<HANDLE>(process_handle_),
+                       kTerminatedExitCode) == FALSE) {
+    return Status::Error(LastErrorMessage("TerminateProcess"));
+  }
+
   const DWORD wait_result =
       WaitForSingleObject(static_cast<HANDLE>(process_handle_),
                           static_cast<DWORD>(timeout_ms));
   if (wait_result == WAIT_TIMEOUT) {
-    // Task 8 will add graceful container/signal behavior. For Task 6, the
-    // Windows controller uses termination after the requested grace period.
-    if (TerminateProcess(static_cast<HANDLE>(process_handle_),
-                         kTerminatedExitCode) == FALSE) {
-      return Status::Error(LastErrorMessage("TerminateProcess"));
-    }
-    if (WaitForSingleObject(static_cast<HANDLE>(process_handle_), INFINITE) ==
-        WAIT_FAILED) {
-      return Status::Error(LastErrorMessage("WaitForSingleObject"));
-    }
-  } else if (wait_result == WAIT_FAILED) {
+    return Status::Error("process termination timed out");
+  }
+  if (wait_result == WAIT_FAILED) {
     return Status::Error(LastErrorMessage("WaitForSingleObject"));
   }
 
