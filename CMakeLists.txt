@@ -15,10 +15,12 @@ include(CompilerWarnings)
 add_library(opcua_common INTERFACE)
 target_include_directories(opcua_common INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+find_package(Threads REQUIRED)
 add_library(sqlite3_static STATIC third_party/sqlite/sqlite3.c)
 target_include_directories(sqlite3_static PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite")
-if(UNIX)
-  target_link_libraries(sqlite3_static PUBLIC dl pthread)
+target_link_libraries(sqlite3_static PUBLIC Threads::Threads)
+if(CMAKE_DL_LIBS)
+  target_link_libraries(sqlite3_static PUBLIC ${CMAKE_DL_LIBS})
 endif()
 
 add_library(opcua_config
