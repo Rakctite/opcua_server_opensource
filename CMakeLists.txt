@@ -38,12 +38,18 @@ if(WIN32)
   target_link_libraries(open62541_static PUBLIC ws2_32 iphlpapi)
 endif()
 
+add_library(opcua_daemon_lib
+  src/daemon/opcua_server.cc
+)
+target_link_libraries(opcua_daemon_lib PUBLIC opcua_common opcua_config open62541_static)
+opcua_target_warnings(opcua_daemon_lib)
+
 add_library(cpp_httplib INTERFACE)
 target_include_directories(cpp_httplib INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cpp-httplib")
 target_link_libraries(cpp_httplib INTERFACE "$<$<PLATFORM_ID:Windows>:ws2_32>")
 
 add_executable(opcua-daemon apps/opcua-daemon/main.cc)
-target_link_libraries(opcua-daemon PRIVATE opcua_common open62541_static)
+target_link_libraries(opcua-daemon PRIVATE opcua_daemon_lib)
 opcua_target_warnings(opcua-daemon)
 
 add_executable(opcua-supervisor apps/opcua-supervisor/main.cc)
@@ -63,4 +69,9 @@ if(OPCUA_BUILD_TESTS)
   target_link_libraries(config_repository_test PRIVATE opcua_config)
   opcua_target_warnings(config_repository_test)
   add_test(NAME config_repository_test COMMAND config_repository_test)
+
+  add_executable(daemon_smoke_test tests/daemon_smoke_test.cc)
+  target_link_libraries(daemon_smoke_test PRIVATE opcua_daemon_lib)
+  opcua_target_warnings(daemon_smoke_test)
+  add_test(NAME daemon_smoke_test COMMAND daemon_smoke_test)
 endif()
