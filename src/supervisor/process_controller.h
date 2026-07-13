@@ -2,6 +2,7 @@
 #define OPCUA_SERVER_SRC_SUPERVISOR_PROCESS_CONTROLLER_H_
 
 #include <chrono>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -38,6 +39,10 @@ class ProcessController {
   ProcessStatus status();
 
  private:
+  Status StartUnlocked();
+  Status StopUnlocked(std::chrono::milliseconds timeout);
+  void ReapExitedUnlocked();
+
 #if defined(_WIN32)
   static std::wstring ToWideString(const std::string& value);
   static std::wstring BuildCommandLine(const std::string& executable_path,
@@ -46,6 +51,7 @@ class ProcessController {
 
   std::string executable_path_;
   std::vector<std::string> args_;
+  std::mutex mutex_;
   ProcessStatus status_;
 
 #if defined(_WIN32)

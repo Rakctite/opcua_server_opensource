@@ -86,7 +86,7 @@ ProcessStatus DecodeExitedStatus(int wait_status, bool expected) {
       status.diagnostic = "process stopped";
     } else {
       status.state = ProcessState::kCrashed;
-      status.diagnostic = "process exited with code " +
+      status.diagnostic = "process exited unexpectedly with code " +
                           std::to_string(status.exit_code);
     }
     return status;
@@ -100,14 +100,16 @@ ProcessStatus DecodeExitedStatus(int wait_status, bool expected) {
     } else {
       status.state = ProcessState::kCrashed;
       status.diagnostic =
-          "process terminated by signal " + std::to_string(status.exit_code);
+          "process terminated unexpectedly by signal " +
+          std::to_string(status.exit_code);
     }
     return status;
   }
 
   status.state = ProcessState::kCrashed;
   status.exit_code = wait_status;
-  status.diagnostic = "process ended with unknown status";
+  status.diagnostic = "process ended unexpectedly with unknown status " +
+                      std::to_string(wait_status);
   return status;
 }
 #endif
@@ -119,8 +121,9 @@ ProcessController::ProcessController(std::string executable_path,
     : executable_path_(std::move(executable_path)), args_(std::move(args)) {}
 
 ProcessController::~ProcessController() {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (status_.state == ProcessState::kRunning) {
-    (void)Stop(std::chrono::milliseconds(500));
+    (void)StopUnlocked(std::chrono::milliseconds(500));
   }
 #if defined(_WIN32)
   if (process_handle_ != nullptr) {
@@ -131,7 +134,12 @@ ProcessController::~ProcessController() {
 }
 
 Status ProcessController::Start() {
-  ReapExited();
+  std::lock_guard<std::mutex> lock(mutex_);
+  return StartUnlocked();
+}
+
+Status ProcessController::StartUnlocked() {
+  ReapExitedUnlocked();
   if (status_.state == ProcessState::kRunning) {
     return Status::Error("process already running");
   }
@@ -188,7 +196,12 @@ Status ProcessController::Start() {
 }
 
 Status ProcessController::Stop(std::chrono::milliseconds timeout) {
-  ReapExited();
+  std::lock_guard<std::mutex> lock(mutex_);
+  return StopUnlocked(timeout);
+}
+
+Status ProcessController::StopUnlocked(std::chrono::milliseconds timeout) {
+  ReapExitedUnlocked();
   if (status_.state != ProcessState::kRunning) {
     return Status::Ok();
   }
@@ -263,14 +276,20 @@ Status ProcessController::Stop(std::chrono::milliseconds timeout) {
 }
 
 Status ProcessController::Restart(std::chrono::milliseconds timeout) {
-  auto stop_status = Stop(timeout);
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto stop_status = StopUnlocked(timeout);
   if (!stop_status.ok()) {
     return stop_status;
   }
-  return Start();
+  return StartUnlocked();
 }
 
 void ProcessController::ReapExited() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  ReapExitedUnlocked();
+}
+
+void ProcessController::ReapExitedUnlocked() {
   if (status_.state != ProcessState::kRunning) {
     return;
   }
@@ -301,7 +320,7 @@ void ProcessController::ReapExited() {
     status_.diagnostic = "process stopped";
   } else {
     status_.state = ProcessState::kCrashed;
-    status_.diagnostic = "process exited with code " +
+    status_.diagnostic = "process exited unexpectedly with code " +
                          std::to_string(status_.exit_code);
   }
 #else
@@ -328,7 +347,8 @@ void ProcessController::ReapExited() {
 }
 
 ProcessStatus ProcessController::status() {
-  ReapExited();
+  std::lock_guard<std::mutex> lock(mutex_);
+  ReapExitedUnlocked();
   return status_;
 }
 

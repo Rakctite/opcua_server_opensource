@@ -88,12 +88,25 @@ if(OPCUA_BUILD_TESTS)
   add_executable(test_child tests/test_child/main.cc)
   opcua_target_warnings(test_child)
 
+  add_executable(crashing_child tests/crashing_child/main.cc)
+  opcua_target_warnings(crashing_child)
+
   add_executable(process_controller_test tests/process_controller_test.cc)
   target_link_libraries(process_controller_test PRIVATE opcua_supervisor_lib)
   opcua_target_warnings(process_controller_test)
   add_test(NAME process_controller_test
     COMMAND process_controller_test $<TARGET_FILE:test_child>
   )
+
+  add_executable(process_crash_test tests/process_crash_test.cc)
+  target_link_libraries(process_crash_test PRIVATE opcua_supervisor_lib)
+  opcua_target_warnings(process_crash_test)
+  add_test(NAME process_crash_test
+    COMMAND process_crash_test
+      $<TARGET_FILE:crashing_child>
+      $<TARGET_FILE:test_child>
+  )
+  set_tests_properties(process_crash_test PROPERTIES TIMEOUT 10)
 
   add_executable(api_server_test tests/api_server_test.cc)
   target_link_libraries(api_server_test PRIVATE opcua_supervisor_lib)
