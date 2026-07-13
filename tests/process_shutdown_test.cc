@@ -9,12 +9,58 @@
 #include <thread>
 
 #if defined(__linux__)
+#include <csignal>
 #include <unistd.h>
 #endif
 
 namespace {
 
 using namespace std::chrono_literals;
+
+#if defined(__linux__)
+void ConsumeShutdownSignal(int) {}
+
+bool TestImmediateStopDoesNotLoseSignal(const std::string& child_path) {
+  struct sigaction consume_action {};
+  consume_action.sa_handler = ConsumeShutdownSignal;
+  sigemptyset(&consume_action.sa_mask);
+  struct sigaction previous_action {};
+  if (sigaction(SIGTERM, &consume_action, &previous_action) != 0) {
+    std::cerr << "failed to install inherited SIGTERM handler\n";
+    return false;
+  }
+
+  bool passed = true;
+  for (int attempt = 0; attempt < 50; ++attempt) {
+    opcua::ProcessController controller(child_path, {});
+    const auto start_status = controller.Start();
+    if (!start_status.ok()) {
+      std::cerr << "failed to start immediate-stop child\n";
+      passed = false;
+      break;
+    }
+
+    const auto stop_started = std::chrono::steady_clock::now();
+    const auto stop_status = controller.Stop(500ms);
+    const auto stop_duration = std::chrono::steady_clock::now() - stop_started;
+    if (!stop_status.ok() || stop_duration >= 400ms) {
+      std::cerr << "immediate child stop reached fallback: "
+                << std::chrono::duration_cast<std::chrono::milliseconds>(
+                       stop_duration)
+                       .count()
+                << "ms\n";
+      passed = false;
+      break;
+    }
+  }
+
+  if (sigaction(SIGTERM, &previous_action, nullptr) != 0) {
+    std::cerr << "failed to restore SIGTERM handler\n";
+    return false;
+  }
+  return passed;
+}
+#endif
 
 bool TestPermanentShutdownGate(const std::string& child_path) {
   opcua::ProcessController controller(child_path, {});
@@ -116,6 +162,11 @@ int main(int argc, char** argv) {
     std::cerr << "missing child path\n";
     return 1;
   }
+#if defined(__linux__)
+  if (!TestImmediateStopDoesNotLoseSignal(argv[1])) {
+    return 1;
+  }
+#endif
   if (!TestPermanentShutdownGate(argv[1])) {
     return 1;
   }

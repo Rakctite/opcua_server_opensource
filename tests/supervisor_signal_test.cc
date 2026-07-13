@@ -226,7 +226,7 @@ bool WaitForChild(SupervisorProcess* supervisor, pid_t* child_pid) {
     if (*child_pid > 0) {
       return true;
     }
-    std::this_thread::sleep_for(10ms);
+    std::this_thread::yield();
   }
   return false;
 }
@@ -350,10 +350,26 @@ int main(int argc, char** argv) {
   }
   supervisor.RecordChild(daemon_pid);
 
+  const auto shutdown_started = std::chrono::steady_clock::now();
   if (kill(supervisor.pid(), SIGTERM) != 0 || !supervisor.WaitForExit(10s)) {
     std::cerr << "supervisor did not stop after SIGTERM\n";
     return 1;
   }
+  const auto shutdown_duration = std::chrono::steady_clock::now() -
+                                 shutdown_started;
+  if (shutdown_duration >= 4s) {
+    std::cerr << "supervisor graceful shutdown exceeded threshold: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                     shutdown_duration)
+                     .count()
+              << "ms\n";
+    return 1;
+  }
+  std::cout << "graceful shutdown elapsed: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(
+                   shutdown_duration)
+                   .count()
+            << "ms\n";
 
   const int wait_status = supervisor.wait_status();
   if (!WIFEXITED(wait_status) || WEXITSTATUS(wait_status) != 0) {

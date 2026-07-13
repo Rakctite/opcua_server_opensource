@@ -18,6 +18,7 @@
 #include <cerrno>
 #include <csignal>
 #include <cstring>
+#include <pthread.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -71,10 +72,14 @@ std::wstring QuoteWindowsArgument(const std::wstring& argument) {
   return quoted;
 }
 #else
-std::string ErrnoMessage(const char* context) {
+std::string PosixErrorMessage(const char* context, int error) {
   std::ostringstream stream;
-  stream << context << " failed: " << std::strerror(errno);
+  stream << context << " failed: " << std::strerror(error);
   return stream.str();
+}
+
+std::string ErrnoMessage(const char* context) {
+  return PosixErrorMessage(context, errno);
 }
 
 ProcessStatus DecodeExitedStatus(int wait_status, bool expected) {
@@ -180,14 +185,83 @@ Status ProcessController::StartUnlocked() {
     argv.push_back(const_cast<char*>(arg.c_str()));
   }
   argv.push_back(nullptr);
+  const char* executable_path = executable_path_.c_str();
+  char* const* child_argv = argv.data();
+
+  sigset_t shutdown_signals;
+  if (sigemptyset(&shutdown_signals) != 0 ||
+      sigaddset(&shutdown_signals, SIGTERM) != 0 ||
+      sigaddset(&shutdown_signals, SIGINT) != 0) {
+    return Status::Error(ErrnoMessage("prepare shutdown signal mask"));
+  }
+
+  struct sigaction default_action {};
+  default_action.sa_handler = SIG_DFL;
+  if (sigemptyset(&default_action.sa_mask) != 0) {
+    return Status::Error(ErrnoMessage("prepare default signal action"));
+  }
+
+  sigset_t original_mask;
+  const int block_error =
+      pthread_sigmask(SIG_BLOCK, &shutdown_signals, &original_mask);
+  if (block_error != 0) {
+    return Status::Error(
+        PosixErrorMessage("pthread_sigmask(SIG_BLOCK)", block_error));
+  }
 
   const pid_t pid = fork();
   if (pid < 0) {
-    return Status::Error(ErrnoMessage("fork"));
+    const int fork_error = errno;
+    const int restore_error =
+        pthread_sigmask(SIG_SETMASK, &original_mask, nullptr);
+    if (restore_error != 0) {
+      return Status::Error(
+          PosixErrorMessage("fork", fork_error) + "; " +
+          PosixErrorMessage("pthread_sigmask(SIG_SETMASK)", restore_error));
+    }
+    return Status::Error(PosixErrorMessage("fork", fork_error));
   }
   if (pid == 0) {
-    execv(executable_path_.c_str(), argv.data());
+    if (sigaction(SIGTERM, &default_action, nullptr) != 0 ||
+        sigaction(SIGINT, &default_action, nullptr) != 0 ||
+        sigprocmask(SIG_SETMASK, &original_mask, nullptr) != 0) {
+      _exit(126);
+    }
+    execv(executable_path, child_argv);
     _exit(127);
+  }
+
+  const int restore_error =
+      pthread_sigmask(SIG_SETMASK, &original_mask, nullptr);
+  if (restore_error != 0) {
+    if (kill(pid, SIGKILL) != 0 && errno != ESRCH) {
+      child_pid_ = pid;
+      status_.state = ProcessState::kRunning;
+      status_.exit_code = 0;
+      status_.diagnostic = "process running after signal mask restore failure";
+      return Status::Error(
+          PosixErrorMessage("pthread_sigmask(SIG_SETMASK)", restore_error));
+    }
+
+    int wait_status = 0;
+    while (waitpid(pid, &wait_status, 0) < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      if (errno == ECHILD) {
+        break;
+      }
+      const int wait_error = errno;
+      child_pid_ = pid;
+      status_.state = ProcessState::kRunning;
+      status_.exit_code = 0;
+      status_.diagnostic = "process ownership retained after waitpid failure";
+      return Status::Error(
+          PosixErrorMessage("pthread_sigmask(SIG_SETMASK)", restore_error) +
+          "; " + PosixErrorMessage("waitpid", wait_error));
+    }
+    return Status::Error(
+        PosixErrorMessage("pthread_sigmask(SIG_SETMASK)", restore_error));
   }
   child_pid_ = pid;
 #endif
