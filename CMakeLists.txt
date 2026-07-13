@@ -54,6 +54,7 @@ target_link_libraries(cpp_httplib INTERFACE "$<$<PLATFORM_ID:Windows>:ws2_32>")
 add_library(opcua_supervisor_lib
   src/supervisor/process_controller.cc
   src/supervisor/api_server.cc
+  src/supervisor/supervisor_exit.cc
 )
 target_link_libraries(opcua_supervisor_lib PUBLIC opcua_common opcua_config cpp_httplib)
 opcua_target_warnings(opcua_supervisor_lib)
@@ -107,6 +108,23 @@ if(OPCUA_BUILD_TESTS)
       $<TARGET_FILE:test_child>
   )
   set_tests_properties(process_crash_test PROPERTIES TIMEOUT 10)
+
+  add_executable(supervisor_exit_test tests/supervisor_exit_test.cc)
+  target_link_libraries(supervisor_exit_test PRIVATE opcua_supervisor_lib)
+  opcua_target_warnings(supervisor_exit_test)
+  add_test(NAME supervisor_exit_test COMMAND supervisor_exit_test)
+  set_tests_properties(supervisor_exit_test PROPERTIES TIMEOUT 5)
+
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(supervisor_signal_test tests/supervisor_signal_test.cc)
+    opcua_target_warnings(supervisor_signal_test)
+    add_test(NAME supervisor_signal_test
+      COMMAND supervisor_signal_test
+        $<TARGET_FILE:opcua-supervisor>
+        $<TARGET_FILE:opcua-daemon>
+    )
+    set_tests_properties(supervisor_signal_test PROPERTIES TIMEOUT 15)
+  endif()
 
   add_executable(api_server_test tests/api_server_test.cc)
   target_link_libraries(api_server_test PRIVATE opcua_supervisor_lib)

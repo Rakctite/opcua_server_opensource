@@ -1,6 +1,7 @@
 #include "config/config_repository.h"
 #include "supervisor/api_server.h"
 #include "supervisor/process_controller.h"
+#include "supervisor/supervisor_exit.h"
 
 #include <chrono>
 #include <csignal>
@@ -70,23 +71,32 @@ int main(int argc, char** argv) {
         promise.set_value(api_server.Run("0.0.0.0", 8080));
       });
 
-  while (shutdown_signal == 0 && api_result.wait_for(0ms) !=
-                                     std::future_status::ready) {
+  opcua::SupervisorExitReason exit_reason;
+  while (true) {
     controller.ReapExited();
-    (void)api_result.wait_for(50ms);
+    if (shutdown_signal != 0) {
+      exit_reason = opcua::SupervisorExitReason::kSignal;
+      break;
+    }
+    if (api_result.wait_for(50ms) == std::future_status::ready) {
+      exit_reason = opcua::SupervisorExitReason::kApiExit;
+      break;
+    }
   }
 
   api_server.Stop();
-  api_thread.join();
-  const auto api_status = api_result.get();
-
   const auto stop_status = controller.Stop(5000ms);
   controller.ReapExited();
+  api_thread.join();
+  const auto api_status = api_result.get();
+  const auto supervisor_status =
+      opcua::ClassifyApiExit(exit_reason, api_status);
+
   if (!stop_status.ok()) {
     std::cerr << "failed to stop daemon: " << stop_status.message() << "\n";
   }
-  if (!api_status.ok()) {
-    std::cerr << "API server failed: " << api_status.message() << "\n";
+  if (!supervisor_status.ok()) {
+    std::cerr << "API server failed: " << supervisor_status.message() << "\n";
     return 1;
   }
   return stop_status.ok() ? 0 : 1;
