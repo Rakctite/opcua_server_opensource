@@ -44,22 +44,26 @@ add_library(opcua_daemon_lib
 target_link_libraries(opcua_daemon_lib PUBLIC opcua_common opcua_config open62541_static)
 opcua_target_warnings(opcua_daemon_lib)
 
+add_library(cpp_httplib INTERFACE)
+target_include_directories(cpp_httplib SYSTEM INTERFACE
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cpp-httplib"
+)
+target_compile_options(cpp_httplib INTERFACE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+target_link_libraries(cpp_httplib INTERFACE "$<$<PLATFORM_ID:Windows>:ws2_32>")
+
 add_library(opcua_supervisor_lib
   src/supervisor/process_controller.cc
+  src/supervisor/api_server.cc
 )
-target_link_libraries(opcua_supervisor_lib PUBLIC opcua_common opcua_config)
+target_link_libraries(opcua_supervisor_lib PUBLIC opcua_common opcua_config cpp_httplib)
 opcua_target_warnings(opcua_supervisor_lib)
-
-add_library(cpp_httplib INTERFACE)
-target_include_directories(cpp_httplib INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cpp-httplib")
-target_link_libraries(cpp_httplib INTERFACE "$<$<PLATFORM_ID:Windows>:ws2_32>")
 
 add_executable(opcua-daemon apps/opcua-daemon/main.cc)
 target_link_libraries(opcua-daemon PRIVATE opcua_daemon_lib)
 opcua_target_warnings(opcua-daemon)
 
 add_executable(opcua-supervisor apps/opcua-supervisor/main.cc)
-target_link_libraries(opcua-supervisor PRIVATE opcua_common cpp_httplib)
+target_link_libraries(opcua-supervisor PRIVATE opcua_supervisor_lib)
 opcua_target_warnings(opcua-supervisor)
 
 if(OPCUA_BUILD_TESTS)
@@ -89,5 +93,12 @@ if(OPCUA_BUILD_TESTS)
   opcua_target_warnings(process_controller_test)
   add_test(NAME process_controller_test
     COMMAND process_controller_test $<TARGET_FILE:test_child>
+  )
+
+  add_executable(api_server_test tests/api_server_test.cc)
+  target_link_libraries(api_server_test PRIVATE opcua_supervisor_lib)
+  opcua_target_warnings(api_server_test)
+  add_test(NAME api_server_test
+    COMMAND api_server_test $<TARGET_FILE:test_child>
   )
 endif()
