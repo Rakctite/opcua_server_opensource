@@ -1,5 +1,8 @@
 #include "supervisor/supervisor_exit.h"
 
+#include <exception>
+#include <string>
+
 namespace opcua {
 
 std::optional<SupervisorExitReason> ObserveSupervisorExit(
@@ -18,6 +21,17 @@ Status ClassifyApiExit(SupervisorExitReason reason, const Status& api_status) {
     return Status::Error("API server exited unexpectedly");
   }
   return api_status;
+}
+
+Status GetApiResult(std::future<Status>* api_result) {
+  try {
+    return api_result->get();
+  } catch (const std::exception& error) {
+    return Status::Error("API server threw exception: " +
+                         std::string(error.what()));
+  } catch (...) {
+    return Status::Error("API server threw unknown exception");
+  }
 }
 
 }  // namespace opcua

@@ -1,9 +1,26 @@
 #include "supervisor/supervisor_exit.h"
 
+#include <future>
 #include <iostream>
+#include <stdexcept>
 #include <string>
+#include <thread>
 
 int main() {
+  std::packaged_task<opcua::Status()> throwing_task([]() -> opcua::Status {
+    throw std::runtime_error("API task exception detail");
+  });
+  auto throwing_result = throwing_task.get_future();
+  std::thread throwing_thread(std::move(throwing_task));
+  throwing_thread.join();
+  const auto exception_status = opcua::GetApiResult(&throwing_result);
+  if (exception_status.ok() ||
+      exception_status.message().find("API task exception detail") ==
+          std::string::npos) {
+    std::cerr << "API task exception should become detailed error status\n";
+    return 1;
+  }
+
   const auto api_exit_during_signal_observation =
       opcua::ObserveSupervisorExit(false, true, true);
   if (!api_exit_during_signal_observation.has_value() ||

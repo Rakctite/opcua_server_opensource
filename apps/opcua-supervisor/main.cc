@@ -2,6 +2,7 @@
 #include "supervisor/api_server.h"
 #include "supervisor/process_controller.h"
 #include "supervisor/supervisor_exit.h"
+#include "supervisor/supervisor_options.h"
 
 #include <chrono>
 #include <csignal>
@@ -42,6 +43,16 @@ int main(int argc, char** argv) {
 
   const std::string db_path = argc > 1 ? argv[1] : "opcua-server.db";
   const std::string daemon_path = argc > 2 ? argv[2] : "opcua-daemon";
+  int api_port = 8080;
+  if (argc > 3) {
+    const auto port_result = opcua::ParseApiPort(argv[3]);
+    if (!port_result.ok()) {
+      std::cerr << "invalid API port: " << port_result.status().message()
+                << "\n";
+      return 1;
+    }
+    api_port = port_result.value();
+  }
 
   auto repository_result = opcua::ConfigRepository::Open(db_path);
   if (!repository_result.ok()) {
@@ -64,12 +75,12 @@ int main(int argc, char** argv) {
   }
 
   opcua::ApiServer api_server(&repository, &controller);
-  std::promise<opcua::Status> api_result_promise;
-  auto api_result = api_result_promise.get_future();
-  std::thread api_thread(
-      [&api_server, promise = std::move(api_result_promise)]() mutable {
-        promise.set_value(api_server.Run("0.0.0.0", 8080));
+  std::packaged_task<opcua::Status()> api_task(
+      [&api_server, api_port] {
+        return api_server.Run("0.0.0.0", api_port);
       });
+  auto api_result = api_task.get_future();
+  std::thread api_thread(std::move(api_task));
 
   opcua::SupervisorExitReason exit_reason;
   while (true) {
@@ -91,11 +102,12 @@ int main(int argc, char** argv) {
     (void)api_result.wait_for(50ms);
   }
 
+  controller.RequestShutdown();
   api_server.Stop();
   const auto stop_status = controller.Stop(5000ms);
   controller.ReapExited();
   api_thread.join();
-  const auto api_status = api_result.get();
+  const auto api_status = opcua::GetApiResult(&api_result);
   const auto supervisor_status =
       opcua::ClassifyApiExit(exit_reason, api_status);
 

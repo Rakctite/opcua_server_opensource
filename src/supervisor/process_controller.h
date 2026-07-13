@@ -1,6 +1,7 @@
 #ifndef OPCUA_SERVER_SRC_SUPERVISOR_PROCESS_CONTROLLER_H_
 #define OPCUA_SERVER_SRC_SUPERVISOR_PROCESS_CONTROLLER_H_
 
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
@@ -35,6 +36,7 @@ class ProcessController {
   Status Start();
   Status Stop(std::chrono::milliseconds timeout);
   Status Restart(std::chrono::milliseconds timeout);
+  void RequestShutdown();
   void ReapExited();
   ProcessStatus status();
 
@@ -51,6 +53,7 @@ class ProcessController {
 
   std::string executable_path_;
   std::vector<std::string> args_;
+  std::atomic<bool> shutdown_requested_{false};
   std::mutex mutex_;
   ProcessStatus status_;
 

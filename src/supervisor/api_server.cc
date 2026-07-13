@@ -539,8 +539,8 @@ class ApiServer::Impl {
     if (repository_ == nullptr || controller_ == nullptr) {
       return Status::Error("API server dependencies must not be null");
     }
-    if (port < 1 || port > 65535) {
-      return Status::Error("API server port must be between 1 and 65535");
+    if (port < 0 || port > 65535) {
+      return Status::Error("API server port must be between 0 and 65535");
     }
     {
       std::lock_guard<std::mutex> lock(lifecycle_mutex_);

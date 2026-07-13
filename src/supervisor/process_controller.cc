@@ -139,6 +139,9 @@ Status ProcessController::Start() {
 }
 
 Status ProcessController::StartUnlocked() {
+  if (shutdown_requested_.load()) {
+    return Status::Error("process controller is shutting down");
+  }
   ReapExitedUnlocked();
   if (status_.state == ProcessState::kRunning) {
     return Status::Error("process already running");
@@ -208,8 +211,6 @@ Status ProcessController::StopUnlocked(std::chrono::milliseconds timeout) {
 
 #if defined(_WIN32)
   const auto timeout_ms = timeout.count() < 0 ? 0 : timeout.count();
-  // Task 8 will add graceful container/signal behavior. For Task 6, the
-  // Windows controller terminates first, then waits for process cleanup.
   if (TerminateProcess(static_cast<HANDLE>(process_handle_),
                        kTerminatedExitCode) == FALSE) {
     return Status::Error(LastErrorMessage("TerminateProcess"));
@@ -277,12 +278,20 @@ Status ProcessController::StopUnlocked(std::chrono::milliseconds timeout) {
 
 Status ProcessController::Restart(std::chrono::milliseconds timeout) {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (shutdown_requested_.load()) {
+    return Status::Error("process controller is shutting down");
+  }
   auto stop_status = StopUnlocked(timeout);
   if (!stop_status.ok()) {
     return stop_status;
   }
+  if (shutdown_requested_.load()) {
+    return Status::Error("process controller is shutting down");
+  }
   return StartUnlocked();
 }
+
+void ProcessController::RequestShutdown() { shutdown_requested_.store(true); }
 
 void ProcessController::ReapExited() {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -298,6 +307,20 @@ void ProcessController::ReapExitedUnlocked() {
   if (process_handle_ == nullptr) {
     return;
   }
+  const DWORD wait_result =
+      WaitForSingleObject(static_cast<HANDLE>(process_handle_), 0);
+  if (wait_result == WAIT_TIMEOUT) {
+    return;
+  }
+  if (wait_result == WAIT_FAILED) {
+    status_.state = ProcessState::kCrashed;
+    status_.exit_code = static_cast<int>(GetLastError());
+    status_.diagnostic = "WaitForSingleObject failed while reaping process";
+    CloseHandle(static_cast<HANDLE>(process_handle_));
+    process_handle_ = nullptr;
+    return;
+  }
+
   DWORD exit_code = 0;
   if (GetExitCodeProcess(static_cast<HANDLE>(process_handle_), &exit_code) ==
       FALSE) {
@@ -306,9 +329,6 @@ void ProcessController::ReapExitedUnlocked() {
     status_.diagnostic = "GetExitCodeProcess failed";
     CloseHandle(static_cast<HANDLE>(process_handle_));
     process_handle_ = nullptr;
-    return;
-  }
-  if (exit_code == STILL_ACTIVE) {
     return;
   }
 

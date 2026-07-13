@@ -454,6 +454,29 @@ int TestImmediateStopAfterRunReturnsPromptly(ApiFixture* fixture) {
   return Expect(false, "no test port available for startup Stop test");
 }
 
+int TestEphemeralPortLifecycle(ApiFixture* fixture) {
+  opcua::ApiServer server(&fixture->repository(), &fixture->controller());
+  std::packaged_task<opcua::Status()> server_task(
+      [&server] { return server.Run("127.0.0.1", 0); });
+  auto future = server_task.get_future();
+  std::thread server_thread(std::move(server_task));
+
+  if (future.wait_for(std::chrono::milliseconds(100)) !=
+      std::future_status::ready) {
+    server.Stop();
+  }
+  if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+    server.Stop();
+    server_thread.join();
+    return Expect(false, "ephemeral-port API server did not stop");
+  }
+
+  const auto run_status = future.get();
+  server_thread.join();
+  return Expect(run_status.ok(),
+                "API server should support ephemeral port zero");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -481,5 +504,6 @@ int main(int argc, char** argv) {
   if (int rc = TestDaemonLifecycle(fixture.get())) return rc;
   if (int rc = TestStopBeforeRunReturnsPromptly(fixture.get())) return rc;
   if (int rc = TestImmediateStopAfterRunReturnsPromptly(fixture.get())) return rc;
+  if (int rc = TestEphemeralPortLifecycle(fixture.get())) return rc;
   return 0;
 }

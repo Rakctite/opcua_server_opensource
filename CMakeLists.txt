@@ -55,6 +55,7 @@ add_library(opcua_supervisor_lib
   src/supervisor/process_controller.cc
   src/supervisor/api_server.cc
   src/supervisor/supervisor_exit.cc
+  src/supervisor/supervisor_options.cc
 )
 target_link_libraries(opcua_supervisor_lib PUBLIC opcua_common opcua_config cpp_httplib)
 opcua_target_warnings(opcua_supervisor_lib)
@@ -92,6 +93,19 @@ if(OPCUA_BUILD_TESTS)
   add_executable(crashing_child tests/crashing_child/main.cc)
   opcua_target_warnings(crashing_child)
 
+  if(WIN32)
+    add_executable(exit_259_child tests/exit_259_child/main.cc)
+    opcua_target_warnings(exit_259_child)
+
+    add_executable(windows_exit_code_test tests/windows_exit_code_test.cc)
+    target_link_libraries(windows_exit_code_test PRIVATE opcua_supervisor_lib)
+    opcua_target_warnings(windows_exit_code_test)
+    add_test(NAME windows_exit_code_test
+      COMMAND windows_exit_code_test $<TARGET_FILE:exit_259_child>
+    )
+    set_tests_properties(windows_exit_code_test PROPERTIES TIMEOUT 10)
+  endif()
+
   add_executable(process_controller_test tests/process_controller_test.cc)
   target_link_libraries(process_controller_test PRIVATE opcua_supervisor_lib)
   opcua_target_warnings(process_controller_test)
@@ -109,11 +123,35 @@ if(OPCUA_BUILD_TESTS)
   )
   set_tests_properties(process_crash_test PROPERTIES TIMEOUT 10)
 
+  add_executable(process_shutdown_test tests/process_shutdown_test.cc)
+  target_link_libraries(process_shutdown_test PRIVATE opcua_supervisor_lib)
+  opcua_target_warnings(process_shutdown_test)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(stubborn_child tests/stubborn_child/main.cc)
+    opcua_target_warnings(stubborn_child)
+    add_test(NAME process_shutdown_test
+      COMMAND process_shutdown_test
+        $<TARGET_FILE:test_child>
+        $<TARGET_FILE:stubborn_child>
+    )
+  else()
+    add_test(NAME process_shutdown_test
+      COMMAND process_shutdown_test $<TARGET_FILE:test_child>
+    )
+  endif()
+  set_tests_properties(process_shutdown_test PROPERTIES TIMEOUT 10)
+
   add_executable(supervisor_exit_test tests/supervisor_exit_test.cc)
   target_link_libraries(supervisor_exit_test PRIVATE opcua_supervisor_lib)
   opcua_target_warnings(supervisor_exit_test)
   add_test(NAME supervisor_exit_test COMMAND supervisor_exit_test)
   set_tests_properties(supervisor_exit_test PROPERTIES TIMEOUT 5)
+
+  add_executable(supervisor_options_test tests/supervisor_options_test.cc)
+  target_link_libraries(supervisor_options_test PRIVATE opcua_supervisor_lib)
+  opcua_target_warnings(supervisor_options_test)
+  add_test(NAME supervisor_options_test COMMAND supervisor_options_test)
+  set_tests_properties(supervisor_options_test PROPERTIES TIMEOUT 5)
 
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_executable(supervisor_signal_test tests/supervisor_signal_test.cc)
@@ -123,7 +161,7 @@ if(OPCUA_BUILD_TESTS)
         $<TARGET_FILE:opcua-supervisor>
         $<TARGET_FILE:opcua-daemon>
     )
-    set_tests_properties(supervisor_signal_test PROPERTIES TIMEOUT 15)
+    set_tests_properties(supervisor_signal_test PROPERTIES TIMEOUT 30)
   endif()
 
   add_executable(api_server_test tests/api_server_test.cc)
@@ -132,4 +170,5 @@ if(OPCUA_BUILD_TESTS)
   add_test(NAME api_server_test
     COMMAND api_server_test $<TARGET_FILE:test_child>
   )
+  set_tests_properties(api_server_test PROPERTIES TIMEOUT 30)
 endif()

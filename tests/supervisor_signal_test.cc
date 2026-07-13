@@ -7,6 +7,9 @@
 #include <string>
 #include <thread>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -31,31 +34,119 @@ pid_t ReadChildPid(pid_t supervisor_pid) {
   return child_pid;
 }
 
-bool WaitForChild(pid_t supervisor_pid, pid_t* child_pid, int* wait_status) {
+class DatabaseCleanup {
+ public:
+  explicit DatabaseCleanup(std::string path) : path_(std::move(path)) {}
+  ~DatabaseCleanup() { RemoveDatabaseFiles(path_); }
+
+  const std::string& path() const { return path_; }
+
+ private:
+  std::string path_;
+};
+
+class DefaultPortCollision {
+ public:
+  DefaultPortCollision() {
+    socket_ = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (socket_ < 0) {
+      return;
+    }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(8080);
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(socket_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) ==
+        0) {
+      valid_ = listen(socket_, 1) == 0;
+      return;
+    }
+    if (errno == EADDRINUSE) {
+      close(socket_);
+      socket_ = -1;
+      valid_ = true;
+    }
+  }
+
+  ~DefaultPortCollision() {
+    if (socket_ >= 0) {
+      close(socket_);
+    }
+  }
+
+  bool valid() const { return valid_; }
+
+ private:
+  int socket_ = -1;
+  bool valid_ = false;
+};
+
+class SupervisorProcess {
+ public:
+  explicit SupervisorProcess(pid_t pid) : pid_(pid) {}
+  ~SupervisorProcess() { Cleanup(); }
+
+  pid_t pid() const { return pid_; }
+  int wait_status() const { return wait_status_; }
+
+  bool PollExited() {
+    if (reaped_) {
+      return true;
+    }
+    const pid_t result = waitpid(pid_, &wait_status_, WNOHANG);
+    if (result == pid_) {
+      reaped_ = true;
+      return true;
+    }
+    if (result < 0 && errno == ECHILD) {
+      reaped_ = true;
+      return true;
+    }
+    return false;
+  }
+
+  bool WaitForExit(std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+      if (PollExited()) {
+        return true;
+      }
+      std::this_thread::sleep_for(10ms);
+    }
+    return PollExited();
+  }
+
+ private:
+  void Cleanup() {
+    if (reaped_ || pid_ <= 0) {
+      return;
+    }
+
+    const pid_t current_child = ReadChildPid(pid_);
+    if (current_child > 0) {
+      (void)kill(current_child, SIGKILL);
+    }
+    (void)kill(pid_, SIGKILL);
+    while (waitpid(pid_, &wait_status_, 0) < 0 && errno == EINTR) {
+    }
+    reaped_ = true;
+  }
+
+  pid_t pid_;
+  int wait_status_ = 0;
+  bool reaped_ = false;
+};
+
+bool WaitForChild(SupervisorProcess* supervisor, pid_t* child_pid) {
   const auto deadline = std::chrono::steady_clock::now() + 5s;
   while (std::chrono::steady_clock::now() < deadline) {
-    const pid_t wait_result = waitpid(supervisor_pid, wait_status, WNOHANG);
-    if (wait_result == supervisor_pid) {
+    if (supervisor->PollExited()) {
       return false;
     }
-    *child_pid = ReadChildPid(supervisor_pid);
+    *child_pid = ReadChildPid(supervisor->pid());
     if (*child_pid > 0) {
       return true;
-    }
-    std::this_thread::sleep_for(10ms);
-  }
-  return false;
-}
-
-bool WaitForExit(pid_t process_pid, int* wait_status) {
-  const auto deadline = std::chrono::steady_clock::now() + 10s;
-  while (std::chrono::steady_clock::now() < deadline) {
-    const pid_t wait_result = waitpid(process_pid, wait_status, WNOHANG);
-    if (wait_result == process_pid) {
-      return true;
-    }
-    if (wait_result < 0 && errno != EINTR) {
-      return false;
     }
     std::this_thread::sleep_for(10ms);
   }
@@ -70,6 +161,12 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  DefaultPortCollision port_collision;
+  if (!port_collision.valid()) {
+    std::cerr << "failed to establish default-port collision\n";
+    return 1;
+  }
+
   char database_template[] = "/tmp/opcua-supervisor-signal-XXXXXX";
   const int database_fd = mkstemp(database_template);
   if (database_fd < 0) {
@@ -77,48 +174,36 @@ int main(int argc, char** argv) {
     return 1;
   }
   close(database_fd);
-  const std::string database_path(database_template);
+  DatabaseCleanup database(database_template);
 
   const pid_t supervisor_pid = fork();
   if (supervisor_pid < 0) {
-    RemoveDatabaseFiles(database_path);
     std::cerr << "failed to fork supervisor\n";
     return 1;
   }
   if (supervisor_pid == 0) {
-    execl(argv[1], argv[1], database_path.c_str(), argv[2], nullptr);
+    execl(argv[1], argv[1], database.path().c_str(), argv[2], "0", nullptr);
     _exit(127);
   }
+  SupervisorProcess supervisor(supervisor_pid);
 
-  int wait_status = 0;
   pid_t daemon_pid = -1;
-  if (!WaitForChild(supervisor_pid, &daemon_pid, &wait_status)) {
-    (void)kill(supervisor_pid, SIGKILL);
-    (void)waitpid(supervisor_pid, &wait_status, 0);
-    RemoveDatabaseFiles(database_path);
+  if (!WaitForChild(&supervisor, &daemon_pid)) {
     std::cerr << "supervisor daemon child did not start\n";
     return 1;
   }
 
-  if (kill(supervisor_pid, SIGTERM) != 0 ||
-      !WaitForExit(supervisor_pid, &wait_status)) {
-    (void)kill(supervisor_pid, SIGKILL);
-    (void)kill(daemon_pid, SIGKILL);
-    (void)waitpid(supervisor_pid, &wait_status, 0);
-    RemoveDatabaseFiles(database_path);
+  if (kill(supervisor.pid(), SIGTERM) != 0 || !supervisor.WaitForExit(10s)) {
     std::cerr << "supervisor did not stop after SIGTERM\n";
     return 1;
   }
 
-  const bool clean_exit = WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 0;
-  const bool daemon_reaped = kill(daemon_pid, 0) != 0 && errno == ESRCH;
-  RemoveDatabaseFiles(database_path);
-  if (!clean_exit) {
+  const int wait_status = supervisor.wait_status();
+  if (!WIFEXITED(wait_status) || WEXITSTATUS(wait_status) != 0) {
     std::cerr << "signal-triggered supervisor exit was not clean\n";
     return 1;
   }
-  if (!daemon_reaped) {
-    (void)kill(daemon_pid, SIGKILL);
+  if (kill(daemon_pid, 0) == 0 || errno != ESRCH) {
     std::cerr << "daemon remained after supervisor exit\n";
     return 1;
   }
