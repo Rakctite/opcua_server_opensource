@@ -2,9 +2,9 @@
 
 namespace opcua {
 
-std::optional<SupervisorExitReason> ObserveSupervisorExit(bool api_ready,
-                                                          bool signal_pending) {
-  if (api_ready) {
+std::optional<SupervisorExitReason> ObserveSupervisorExit(
+    bool api_ready, bool signal_pending, bool api_ready_after_signal) {
+  if (api_ready || (signal_pending && api_ready_after_signal)) {
     return SupervisorExitReason::kApiExit;
   }
   if (signal_pending) {

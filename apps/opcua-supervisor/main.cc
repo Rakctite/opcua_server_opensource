@@ -77,8 +77,13 @@ int main(int argc, char** argv) {
     const bool api_ready =
         api_result.wait_for(0ms) == std::future_status::ready;
     const bool signal_pending = shutdown_signal != 0;
-    const auto observed_exit =
-        opcua::ObserveSupervisorExit(api_ready, signal_pending);
+    bool api_ready_after_signal = false;
+    if (!api_ready && signal_pending) {
+      api_ready_after_signal =
+          api_result.wait_for(0ms) == std::future_status::ready;
+    }
+    const auto observed_exit = opcua::ObserveSupervisorExit(
+        api_ready, signal_pending, api_ready_after_signal);
     if (observed_exit.has_value()) {
       exit_reason = observed_exit.value();
       break;

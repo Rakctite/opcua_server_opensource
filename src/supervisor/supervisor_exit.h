@@ -12,8 +12,8 @@ enum class SupervisorExitReason {
   kApiExit,
 };
 
-std::optional<SupervisorExitReason> ObserveSupervisorExit(bool api_ready,
-                                                          bool signal_pending);
+std::optional<SupervisorExitReason> ObserveSupervisorExit(
+    bool api_ready, bool signal_pending, bool api_ready_after_signal);
 Status ClassifyApiExit(SupervisorExitReason reason, const Status& api_status);
 
 }  // namespace opcua

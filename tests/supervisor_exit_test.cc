@@ -4,29 +4,39 @@
 #include <string>
 
 int main() {
+  const auto api_exit_during_signal_observation =
+      opcua::ObserveSupervisorExit(false, true, true);
+  if (!api_exit_during_signal_observation.has_value() ||
+      api_exit_during_signal_observation.value() !=
+          opcua::SupervisorExitReason::kApiExit) {
+    std::cerr << "post-signal API readiness must take precedence\n";
+    return 1;
+  }
+
   const auto simultaneous_exit =
-      opcua::ObserveSupervisorExit(true, true);
+      opcua::ObserveSupervisorExit(true, true, false);
   if (!simultaneous_exit.has_value() ||
       simultaneous_exit.value() != opcua::SupervisorExitReason::kApiExit) {
     std::cerr << "ready API must take precedence over pending signal\n";
     return 1;
   }
 
-  const auto api_exit = opcua::ObserveSupervisorExit(true, false);
+  const auto api_exit = opcua::ObserveSupervisorExit(true, false, false);
   if (!api_exit.has_value() ||
       api_exit.value() != opcua::SupervisorExitReason::kApiExit) {
     std::cerr << "ready API should end supervision\n";
     return 1;
   }
 
-  const auto signal_observed = opcua::ObserveSupervisorExit(false, true);
+  const auto signal_observed =
+      opcua::ObserveSupervisorExit(false, true, false);
   if (!signal_observed.has_value() ||
       signal_observed.value() != opcua::SupervisorExitReason::kSignal) {
     std::cerr << "pending signal should end supervision\n";
     return 1;
   }
 
-  if (opcua::ObserveSupervisorExit(false, false).has_value()) {
+  if (opcua::ObserveSupervisorExit(false, false, false).has_value()) {
     std::cerr << "supervision should continue without an exit condition\n";
     return 1;
   }
