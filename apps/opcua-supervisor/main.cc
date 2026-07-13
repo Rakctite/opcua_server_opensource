@@ -74,14 +74,16 @@ int main(int argc, char** argv) {
   opcua::SupervisorExitReason exit_reason;
   while (true) {
     controller.ReapExited();
-    if (shutdown_signal != 0) {
-      exit_reason = opcua::SupervisorExitReason::kSignal;
+    const bool api_ready =
+        api_result.wait_for(0ms) == std::future_status::ready;
+    const bool signal_pending = shutdown_signal != 0;
+    const auto observed_exit =
+        opcua::ObserveSupervisorExit(api_ready, signal_pending);
+    if (observed_exit.has_value()) {
+      exit_reason = observed_exit.value();
       break;
     }
-    if (api_result.wait_for(50ms) == std::future_status::ready) {
-      exit_reason = opcua::SupervisorExitReason::kApiExit;
-      break;
-    }
+    (void)api_result.wait_for(50ms);
   }
 
   api_server.Stop();

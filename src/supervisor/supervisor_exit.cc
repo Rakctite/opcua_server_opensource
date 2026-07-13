@@ -2,6 +2,17 @@
 
 namespace opcua {
 
+std::optional<SupervisorExitReason> ObserveSupervisorExit(bool api_ready,
+                                                          bool signal_pending) {
+  if (api_ready) {
+    return SupervisorExitReason::kApiExit;
+  }
+  if (signal_pending) {
+    return SupervisorExitReason::kSignal;
+  }
+  return std::nullopt;
+}
+
 Status ClassifyApiExit(SupervisorExitReason reason, const Status& api_status) {
   if (reason == SupervisorExitReason::kApiExit && api_status.ok()) {
     return Status::Error("API server exited unexpectedly");

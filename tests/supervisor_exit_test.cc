@@ -4,6 +4,33 @@
 #include <string>
 
 int main() {
+  const auto simultaneous_exit =
+      opcua::ObserveSupervisorExit(true, true);
+  if (!simultaneous_exit.has_value() ||
+      simultaneous_exit.value() != opcua::SupervisorExitReason::kApiExit) {
+    std::cerr << "ready API must take precedence over pending signal\n";
+    return 1;
+  }
+
+  const auto api_exit = opcua::ObserveSupervisorExit(true, false);
+  if (!api_exit.has_value() ||
+      api_exit.value() != opcua::SupervisorExitReason::kApiExit) {
+    std::cerr << "ready API should end supervision\n";
+    return 1;
+  }
+
+  const auto signal_observed = opcua::ObserveSupervisorExit(false, true);
+  if (!signal_observed.has_value() ||
+      signal_observed.value() != opcua::SupervisorExitReason::kSignal) {
+    std::cerr << "pending signal should end supervision\n";
+    return 1;
+  }
+
+  if (opcua::ObserveSupervisorExit(false, false).has_value()) {
+    std::cerr << "supervision should continue without an exit condition\n";
+    return 1;
+  }
+
   const auto signal_exit = opcua::ClassifyApiExit(
       opcua::SupervisorExitReason::kSignal, opcua::Status::Ok());
   if (!signal_exit.ok()) {
