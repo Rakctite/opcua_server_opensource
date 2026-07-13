@@ -287,6 +287,9 @@ class ConfigJsonParser {
           } else if (code_point >= 0xDC00U && code_point <= 0xDFFFU) {
             return Status::Error("unexpected low surrogate");
           }
+          if (code_point == 0) {
+            return Status::Error("NUL is not allowed in configuration strings");
+          }
           AppendCodePoint(code_point, &value);
           break;
         }
@@ -486,6 +489,23 @@ class ApiServer::Impl {
  public:
   Impl(ConfigRepository* repository, ProcessController* controller)
       : repository_(repository), controller_(controller) {
+    server_.set_payload_max_length(kMaxConfigJsonBytes + 1);
+    server_.set_error_handler(
+        [](const httplib::Request&, httplib::Response& res) {
+          if (res.status == 413) {
+            SetError(&res, 400,
+                     "configuration request exceeds 65536 bytes");
+          }
+        });
+    server_.set_start_handler([this] {
+      bool stop_requested = false;
+      {
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        lifecycle_state_ = LifecycleState::kRunning;
+        stop_requested = stop_requested_;
+      }
+      if (stop_requested) server_.stop();
+    });
     server_.Get("/health", [](const httplib::Request&, httplib::Response& res) {
       SetJson(&res, 200, "{\"status\":\"ok\"}");
     });
@@ -522,19 +542,45 @@ class ApiServer::Impl {
     if (port < 1 || port > 65535) {
       return Status::Error("API server port must be between 1 and 65535");
     }
+    {
+      std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+      if (lifecycle_state_ != LifecycleState::kIdle) {
+        return Status::Error("API server can only be run once");
+      }
+      if (stop_requested_) {
+        lifecycle_state_ = LifecycleState::kStopped;
+        return Status::Ok();
+      }
+      lifecycle_state_ = LifecycleState::kStarting;
+    }
     if (!server_.bind_to_port(bind_address, port)) {
+      std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+      lifecycle_state_ = LifecycleState::kStopped;
       return Status::Error("failed to bind API server to " + bind_address +
                            ":" + std::to_string(port));
     }
-    if (!server_.listen_after_bind()) {
+    const bool listen_succeeded = server_.listen_after_bind();
+    {
+      std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+      lifecycle_state_ = LifecycleState::kStopped;
+    }
+    if (!listen_succeeded) {
       return Status::Error("API server listener failed");
     }
     return Status::Ok();
   }
 
-  void Stop() { server_.stop(); }
+  void Stop() {
+    {
+      std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+      stop_requested_ = true;
+    }
+    server_.stop();
+  }
 
  private:
+  enum class LifecycleState { kIdle, kStarting, kRunning, kStopped };
+
   void HandleStatus(httplib::Response* response) {
     std::lock_guard<std::mutex> lock(operations_mutex_);
     const ProcessStatus status = controller_->status();
@@ -605,6 +651,9 @@ class ApiServer::Impl {
   ProcessController* controller_;
   httplib::Server server_;
   std::mutex operations_mutex_;
+  std::mutex lifecycle_mutex_;
+  LifecycleState lifecycle_state_ = LifecycleState::kIdle;
+  bool stop_requested_ = false;
 };
 
 ApiServer::ApiServer(ConfigRepository* repository, ProcessController* controller)

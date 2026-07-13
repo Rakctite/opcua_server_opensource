@@ -12,10 +12,25 @@
 #include <string>
 #include <thread>
 
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
 
-constexpr int kFirstTestPort = 38080;
-constexpr int kLastTestPort = 38089;
+constexpr int kTestPortRange = 10;
+
+int ProcessId() {
+#if defined(_WIN32)
+  return _getpid();
+#else
+  return static_cast<int>(getpid());
+#endif
+}
+
+int FirstTestPort() { return 30000 + ProcessId() % 20000; }
 
 int Expect(bool condition, const std::string& message) {
   if (!condition) {
@@ -60,7 +75,8 @@ std::string CompleteConfigJson(const std::string& port = "4850") {
 class ApiFixture {
  public:
   static std::unique_ptr<ApiFixture> Create(const std::string& child_path) {
-    const std::string db_path = "api_server_test.db";
+    const std::string db_path =
+        "api_server_test_" + std::to_string(ProcessId()) + ".db";
     RemoveDatabaseFiles(db_path);
     auto repository_result = opcua::ConfigRepository::Open(db_path);
     if (!repository_result.ok()) {
@@ -90,7 +106,8 @@ class ApiFixture {
   ApiFixture& operator=(const ApiFixture&) = delete;
 
   bool Start() {
-    for (int candidate = kFirstTestPort; candidate <= kLastTestPort;
+    for (int candidate = FirstTestPort();
+         candidate < FirstTestPort() + kTestPortRange;
          ++candidate) {
       server_ = std::make_unique<opcua::ApiServer>(&repository_, &controller_);
       std::promise<opcua::Status> completion;
@@ -125,6 +142,7 @@ class ApiFixture {
 
   httplib::Client Client() const { return httplib::Client("127.0.0.1", port_); }
   opcua::ConfigRepository& repository() { return repository_; }
+  opcua::ProcessController& controller() { return controller_; }
 
  private:
   ApiFixture(std::string db_path, opcua::ConfigRepository repository,
@@ -258,6 +276,41 @@ int ExpectBadPut(ApiFixture* fixture, const std::string& body,
                 description + " should return application/json");
 }
 
+int TestPutConfigRejectsNul(ApiFixture* fixture) {
+  std::string body = CompleteConfigJson();
+  const std::string application_name = "Test \\\"Server\\\"\\nLine";
+  body.replace(body.find(application_name), application_name.size(),
+               "A\\u0000B");
+  return ExpectBadPut(fixture, body, "JSON string containing NUL");
+}
+
+int TestOversizedPayloadRejectedByTransport(ApiFixture* fixture) {
+  auto response = fixture->Client().Put("/api/v1/config",
+                                        std::string(65538, ' '),
+                                        "application/json");
+  if (int rc = Expect(response && response->status == 400,
+                      "transport-oversized config should return 400")) {
+    return rc;
+  }
+  if (int rc = Expect(HasJsonContentType(response),
+                      "transport-oversized config should return JSON")) {
+    return rc;
+  }
+  return Expect(
+      response->body ==
+          "{\"error\":\"configuration request exceeds 65536 bytes\"}",
+      "transport-oversized config should use the transport-limit error");
+}
+
+int TestMaximumPayloadSizeAccepted(ApiFixture* fixture) {
+  std::string body = CompleteConfigJson();
+  body.resize(65536, ' ');
+  auto response = fixture->Client().Put("/api/v1/config", body,
+                                        "application/json");
+  return Expect(response && response->status == 200,
+                "exactly 65536 config bytes should be accepted");
+}
+
 int TestPutConfigRejectsInvalidJson(ApiFixture* fixture) {
   if (int rc = ExpectBadPut(fixture, "{", "malformed JSON")) return rc;
   if (int rc = ExpectBadPut(fixture, CompleteConfigJson("70000"),
@@ -334,6 +387,73 @@ int TestDaemonLifecycle(ApiFixture* fixture) {
                 "daemon should be stopped after stop");
 }
 
+int TestStopBeforeRunReturnsPromptly(ApiFixture* fixture) {
+  for (int candidate = FirstTestPort() + 20;
+       candidate < FirstTestPort() + 20 + kTestPortRange;
+       ++candidate) {
+    opcua::ApiServer server(&fixture->repository(), &fixture->controller());
+    server.Stop();
+
+    std::promise<opcua::Status> completion;
+    auto future = completion.get_future();
+    std::thread server_thread(
+        [&server, candidate, completion = std::move(completion)]() mutable {
+          completion.set_value(server.Run("127.0.0.1", candidate));
+        });
+
+    if (future.wait_for(std::chrono::milliseconds(250)) !=
+        std::future_status::ready) {
+      for (int attempt = 0; attempt < 200; ++attempt) {
+        server.Stop();
+        if (future.wait_for(std::chrono::milliseconds(10)) ==
+            std::future_status::ready) {
+          break;
+        }
+      }
+      server_thread.join();
+      return Expect(false, "Stop before Run should be latched");
+    }
+
+    auto run_status = future.get();
+    server_thread.join();
+    if (run_status.ok()) return 0;
+  }
+  return Expect(false, "no test port available for immediate Stop test");
+}
+
+int TestImmediateStopAfterRunReturnsPromptly(ApiFixture* fixture) {
+  for (int candidate = FirstTestPort() + 40;
+       candidate < FirstTestPort() + 40 + kTestPortRange;
+       ++candidate) {
+    opcua::ApiServer server(&fixture->repository(), &fixture->controller());
+    std::promise<opcua::Status> completion;
+    auto future = completion.get_future();
+    std::thread server_thread(
+        [&server, candidate, completion = std::move(completion)]() mutable {
+          completion.set_value(server.Run("127.0.0.1", candidate));
+        });
+    server.Stop();
+
+    if (future.wait_for(std::chrono::milliseconds(250)) !=
+        std::future_status::ready) {
+      for (int attempt = 0; attempt < 200; ++attempt) {
+        server.Stop();
+        if (future.wait_for(std::chrono::milliseconds(10)) ==
+            std::future_status::ready) {
+          break;
+        }
+      }
+      server_thread.join();
+      return Expect(false, "Stop immediately after Run should finish Run");
+    }
+
+    auto run_status = future.get();
+    server_thread.join();
+    if (run_status.ok()) return 0;
+  }
+  return Expect(false, "no test port available for startup Stop test");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -354,7 +474,12 @@ int main(int argc, char** argv) {
   if (int rc = TestStatus(fixture.get())) return rc;
   if (int rc = TestGetConfig(fixture.get())) return rc;
   if (int rc = TestPutConfigPersistsCompleteObject(fixture.get())) return rc;
+  if (int rc = TestPutConfigRejectsNul(fixture.get())) return rc;
+  if (int rc = TestOversizedPayloadRejectedByTransport(fixture.get())) return rc;
+  if (int rc = TestMaximumPayloadSizeAccepted(fixture.get())) return rc;
   if (int rc = TestPutConfigRejectsInvalidJson(fixture.get())) return rc;
   if (int rc = TestDaemonLifecycle(fixture.get())) return rc;
+  if (int rc = TestStopBeforeRunReturnsPromptly(fixture.get())) return rc;
+  if (int rc = TestImmediateStopAfterRunReturnsPromptly(fixture.get())) return rc;
   return 0;
 }
