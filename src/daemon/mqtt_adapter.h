@@ -44,6 +44,7 @@ class MqttAdapter {
  private:
   friend int MqttAdapterCallbackParseFailuresUseAggregateLogOnlyForTest();
   friend int MqttAdapterDuplicatePayloadRefreshesLastValidMessageForTest();
+  friend int MqttAdapterInitialConnectCallbacksSubscribeOnceForTest();
   friend int MqttAdapterSubscribeFailureLeavesSourceDisconnectedForTest();
   friend int MqttAdapterSubscribeCallbacksUpdateSourceHealthForTest();
 
@@ -74,6 +75,7 @@ class MqttAdapter {
   MQTTAsync client_ = nullptr;
 
   std::atomic_bool accepting_{false};
+  std::atomic_bool skip_next_connected_subscribe_{false};
 
   std::mutex health_mutex_;
   std::condition_variable watchdog_wakeup_;
@@ -84,6 +86,7 @@ class MqttAdapter {
   std::mutex callback_mutex_;
   std::condition_variable callback_drained_;
   int active_callbacks_ = 0;
+  int subscribe_attempts_for_test_ = 0;
 
   std::atomic_uint32_t parse_failures_{0};
 };

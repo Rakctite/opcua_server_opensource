@@ -104,6 +104,7 @@ Status MqttAdapter::Start() {
     std::lock_guard<std::mutex> lock(health_mutex_);
     watchdog_stop_ = false;
   }
+  skip_next_connected_subscribe_.store(false);
   accepting_.store(true);
 
   rc = MQTTAsync_connect(client_, &options);
@@ -242,7 +243,9 @@ void MqttAdapter::Connected(void* context, char* /*cause*/) {
     return;
   }
 
-  adapter->StartSubscribe();
+  if (!adapter->skip_next_connected_subscribe_.exchange(false)) {
+    adapter->StartSubscribe();
+  }
   adapter->LeaveCallback();
 }
 
@@ -280,6 +283,7 @@ void MqttAdapter::ConnectSucceeded(void* context,
   if (adapter == nullptr || !adapter->EnterCallback()) {
     return;
   }
+  adapter->skip_next_connected_subscribe_.store(true);
   adapter->StartSubscribe();
   adapter->LeaveCallback();
 }
@@ -346,6 +350,8 @@ void MqttAdapter::LeaveCallback() {
 }
 
 void MqttAdapter::StartSubscribe() {
+  ++subscribe_attempts_for_test_;
+
   MQTTAsync_responseOptions options = MQTTAsync_responseOptions_initializer;
   options.context = this;
   options.onSuccess = &MqttAdapter::SubscribeSucceeded;

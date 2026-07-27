@@ -264,6 +264,46 @@ int MqttAdapterSubscribeFailureLeavesSourceDisconnectedForTest() {
                 "subscribe failure should leave source disconnected");
 }
 
+int MqttAdapterInitialConnectCallbacksSubscribeOnceForTest() {
+  opcua::RealtimeValueStore store;
+  const auto slot = store.AddSlot(opcua::ScalarType::kDouble);
+  auto config = opcua::MqttConfig::Default();
+  config.enabled = true;
+
+  opcua::MqttAdapter adapter(config, opcua::ScalarType::kDouble, &store, slot);
+  if (int rc = MQTTAsync_create(&adapter.client_, config.broker_uri.c_str(),
+                                config.client_id.c_str(),
+                                MQTTCLIENT_PERSISTENCE_NONE, nullptr);
+      rc != MQTTASYNC_SUCCESS) {
+    return Expect(false, "test setup should create MQTT client");
+  }
+  adapter.accepting_.store(true);
+
+  std::ostringstream captured;
+  auto* const old_cerr = std::cerr.rdbuf(captured.rdbuf());
+  opcua::MqttAdapter::ConnectSucceeded(&adapter, nullptr);
+  opcua::MqttAdapter::Connected(&adapter, nullptr);
+  std::cerr.rdbuf(old_cerr);
+
+  const auto health = store.ReadSourceHealth();
+  const int initial_subscribe_attempts = adapter.subscribe_attempts_for_test_;
+  opcua::MqttAdapter::Connected(&adapter, nullptr);
+  const int reconnect_subscribe_attempts = adapter.subscribe_attempts_for_test_;
+  adapter.Stop();
+
+  if (int rc = Expect(initial_subscribe_attempts == 1,
+                      "initial connect callbacks should subscribe once")) {
+    return rc;
+  }
+  if (int rc = Expect(reconnect_subscribe_attempts == 2,
+                      "reconnect connected callback should subscribe")) {
+    return rc;
+  }
+  return Expect(health.connection_state !=
+                    opcua::SourceConnectionState::kConnected,
+                "source should remain disconnected until subscribe succeeds");
+}
+
 int MqttAdapterSubscribeCallbacksUpdateSourceHealthForTest() {
   opcua::RealtimeValueStore store;
   const auto slot = store.AddSlot(opcua::ScalarType::kDouble);
@@ -320,6 +360,10 @@ int main() {
   }
   if (int rc =
           opcua::MqttAdapterSubscribeFailureLeavesSourceDisconnectedForTest()) {
+    return rc;
+  }
+  if (int rc =
+          opcua::MqttAdapterInitialConnectCallbacksSubscribeOnceForTest()) {
     return rc;
   }
   if (int rc =
