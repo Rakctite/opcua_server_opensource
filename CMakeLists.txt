@@ -90,6 +90,13 @@ if(OPCUA_BUILD_TESTS)
   opcua_target_warnings(config_repository_test)
   add_test(NAME config_repository_test COMMAND config_repository_test)
 
+  add_executable(mqtt_config_repository_test
+    tests/mqtt_config_repository_test.cc
+  )
+  target_link_libraries(mqtt_config_repository_test PRIVATE opcua_config)
+  opcua_target_warnings(mqtt_config_repository_test)
+  add_test(NAME mqtt_config_repository_test COMMAND mqtt_config_repository_test)
+
   add_executable(daemon_smoke_test tests/daemon_smoke_test.cc)
   target_link_libraries(daemon_smoke_test PRIVATE opcua_daemon_lib)
   opcua_target_warnings(daemon_smoke_test)

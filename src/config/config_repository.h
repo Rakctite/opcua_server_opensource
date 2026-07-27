@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "common/result.h"
+#include "config/mqtt_config.h"
 #include "config/server_config.h"
 #include "config/sqlite_db.h"
 
@@ -22,6 +23,8 @@ class ConfigRepository {
   Status Initialize();
   Result<ServerConfig> Load();
   Status Save(const ServerConfig& config);
+  Result<MqttConfig> LoadMqtt();
+  Status SaveMqtt(const MqttConfig& config);
 
  private:
   explicit ConfigRepository(SqliteDb db) : db_(std::move(db)) {}
