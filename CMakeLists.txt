@@ -41,6 +41,7 @@ endif()
 
 add_library(opcua_daemon_lib
   src/daemon/opcua_server.cc
+  src/daemon/realtime_address_space.cc
   src/daemon/realtime_value_store.cc
 )
 target_link_libraries(opcua_daemon_lib PUBLIC opcua_common opcua_config open62541_static)
@@ -110,6 +111,13 @@ if(OPCUA_BUILD_TESTS)
   target_link_libraries(realtime_value_store_test PRIVATE opcua_daemon_lib)
   opcua_target_warnings(realtime_value_store_test)
   add_test(NAME realtime_value_store_test COMMAND realtime_value_store_test)
+
+  add_executable(realtime_address_space_test
+    tests/realtime_address_space_test.cc
+  )
+  target_link_libraries(realtime_address_space_test PRIVATE opcua_daemon_lib)
+  opcua_target_warnings(realtime_address_space_test)
+  add_test(NAME realtime_address_space_test COMMAND realtime_address_space_test)
 
   add_executable(test_child tests/test_child/main.cc)
   opcua_target_warnings(test_child)

@@ -215,9 +215,11 @@ int TestMqttPersistence(const std::string& db_path) {
     return rc;
   }
 
-  persisted.browse_name = std::string("Node\0Suffix", 11);
-  save_status = repository.SaveMqtt(persisted);
-  if (int rc = Expect(save_status.ok(), save_status.message().c_str())) {
+  auto embedded_nul = persisted;
+  embedded_nul.browse_name = std::string("Node\0Suffix", 11);
+  save_status = repository.SaveMqtt(embedded_nul);
+  if (int rc = Expect(!save_status.ok(),
+                      "SaveMqtt should reject embedded NUL browse_name")) {
     return rc;
   }
   loaded_result = repository.LoadMqtt();
@@ -226,7 +228,7 @@ int TestMqttPersistence(const std::string& db_path) {
     return rc;
   }
   if (int rc = Expect(ConfigsEqual(loaded_result.value(), persisted),
-                      "embedded NUL text did not round-trip exactly")) {
+                      "embedded NUL SaveMqtt changed persisted config")) {
     return rc;
   }
 

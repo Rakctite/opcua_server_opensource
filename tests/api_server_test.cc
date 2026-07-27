@@ -539,6 +539,20 @@ int TestPutMqttConfigRejectsInvalidInput(ApiFixture* fixture) {
     return rc;
   }
 
+  std::string nul_browse_name = persisted;
+  nul_browse_name.replace(nul_browse_name.find("Temperature"), 11,
+                          "a\\u0000b");
+  if (int rc = ExpectBadMqttPut(fixture, nul_browse_name,
+                                "MQTT browse_name containing NUL")) {
+    return rc;
+  }
+  get_response = fixture->Client().Get("/api/v1/mqtt-config");
+  if (int rc = Expect(get_response && get_response->status == 200 &&
+                          get_response->body == persisted,
+                      "NUL browse_name PUT should preserve persisted config")) {
+    return rc;
+  }
+
   return ExpectBadMqttPut(fixture, std::string(65537, ' '),
                           "oversized MQTT JSON");
 }

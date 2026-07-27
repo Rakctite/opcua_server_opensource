@@ -51,6 +51,11 @@ int TestReviewRegressions() {
   config.topic = std::string("a\0b", 3);
   failures +=
       Expect(!config.Validate().ok(), "embedded NUL in topic should fail");
+
+  config = opcua::MqttConfig::Default();
+  config.browse_name = std::string("a\0b", 3);
+  failures += Expect(!config.Validate().ok(),
+                     "embedded NUL in browse_name should fail");
   return failures;
 }
 

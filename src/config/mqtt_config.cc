@@ -243,8 +243,9 @@ Status MqttConfig::Validate() const {
   if (node_id == 0) {
     return Status::Error("mqtt.node_id must be positive");
   }
-  if (browse_name.empty()) {
-    return Status::Error("mqtt.browse_name must not be empty");
+  if (browse_name.empty() || browse_name.find('\0') != std::string::npos) {
+    return Status::Error(
+        "mqtt.browse_name must be nonempty and contain no NUL");
   }
   if (data_type != "boolean" && data_type != "int64" &&
       data_type != "double") {
