@@ -23,6 +23,8 @@
 
 namespace opcua {
 
+int MqttAdapterCallbackParseFailuresUseAggregateLogOnlyForTest();
+
 class MqttAdapter {
  public:
   MqttAdapter(MqttConfig config, ScalarType type, RealtimeValueStore* store,
@@ -40,6 +42,8 @@ class MqttAdapter {
   void PollHealth(std::chrono::steady_clock::time_point now);
 
  private:
+  friend int MqttAdapterCallbackParseFailuresUseAggregateLogOnlyForTest();
+
   static void Connected(void* context, char* cause);
   static void ConnectionLost(void* context, char* cause);
   static int MessageArrived(void* context, char* topic_name, int topic_length,

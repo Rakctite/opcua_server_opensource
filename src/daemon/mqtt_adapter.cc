@@ -37,6 +37,10 @@ std::string_view PayloadView(MQTTAsync_message* message) {
                           static_cast<std::size_t>(message->payloadlen));
 }
 
+bool IsParseFailure(const Status& status) {
+  return status.message() == "invalid MQTT scalar payload";
+}
+
 }  // namespace
 
 MqttAdapter::MqttAdapter(MqttConfig config, ScalarType type,
@@ -228,7 +232,7 @@ int MqttAdapter::MessageArrived(void* context, char* topic_name,
     const Status status =
         adapter->AcceptMessage(TopicView(topic_name, topic_length),
                                PayloadView(message), UA_DateTime_now());
-    if (!status.ok()) {
+    if (!status.ok() && !IsParseFailure(status)) {
       std::cerr << "MQTT message rejected: " << status.message() << "\n";
     }
     adapter->LeaveCallback();
