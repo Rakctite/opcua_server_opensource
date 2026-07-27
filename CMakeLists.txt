@@ -40,6 +40,7 @@ if(WIN32)
 endif()
 
 add_library(opcua_daemon_lib
+  src/daemon/mqtt_payload_parser.cc
   src/daemon/opcua_server.cc
   src/daemon/realtime_address_space.cc
   src/daemon/realtime_value_store.cc
@@ -111,6 +112,13 @@ if(OPCUA_BUILD_TESTS)
   target_link_libraries(realtime_value_store_test PRIVATE opcua_daemon_lib)
   opcua_target_warnings(realtime_value_store_test)
   add_test(NAME realtime_value_store_test COMMAND realtime_value_store_test)
+
+  add_executable(mqtt_payload_parser_test
+    tests/mqtt_payload_parser_test.cc
+  )
+  target_link_libraries(mqtt_payload_parser_test PRIVATE opcua_daemon_lib)
+  opcua_target_warnings(mqtt_payload_parser_test)
+  add_test(NAME mqtt_payload_parser_test COMMAND mqtt_payload_parser_test)
 
   add_executable(realtime_address_space_test
     tests/realtime_address_space_test.cc
