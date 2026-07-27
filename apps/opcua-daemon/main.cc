@@ -45,7 +45,12 @@ int main(int argc, char* argv[]) {
     return PrintError(config_result.status());
   }
 
-  opcua::OpcuaServer server(config_result.value());
+  auto mqtt_config_result = repo.LoadMqtt();
+  if (!mqtt_config_result.ok()) {
+    return PrintError(mqtt_config_result.status());
+  }
+
+  opcua::OpcuaServer server(config_result.value(), mqtt_config_result.value());
   std::atomic_bool running(true);
   std::thread signal_monitor([&running]() {
     while (running.load() && g_shutdown_requested == 0) {

@@ -41,8 +41,9 @@ class DatabaseCleanup {
   std::string db_path_;
 };
 
-opcua::Status RunServerBriefly(const opcua::ServerConfig& config) {
-  opcua::OpcuaServer server(config);
+opcua::Status RunServerBriefly(const opcua::ServerConfig& server_config,
+                               const opcua::MqttConfig& mqtt_config) {
+  opcua::OpcuaServer server(server_config, mqtt_config);
   std::atomic_bool running(true);
   opcua::Status run_status = opcua::Status::Ok();
   std::thread server_thread([&server, &running, &run_status]() {
@@ -72,6 +73,16 @@ int main() {
   auto config_result = repo.Load();
   if (int rc = Expect(config_result.ok(), config_result.status().message().c_str())) return rc;
 
+  auto mqtt_config_result = repo.LoadMqtt();
+  if (int rc = Expect(mqtt_config_result.ok(),
+                      mqtt_config_result.status().message().c_str())) {
+    return rc;
+  }
+  if (int rc = Expect(!mqtt_config_result.value().enabled,
+                      "daemon smoke MQTT default should be disabled")) {
+    return rc;
+  }
+
   const std::array<int, 5> test_ports = {48400, 48401, 48402, 48403, 48404};
   opcua::Status last_run_status = opcua::Status::Error("server did not run");
   for (const int port : test_ports) {
@@ -90,7 +101,8 @@ int main() {
       return rc;
     }
 
-    last_run_status = RunServerBriefly(loaded_config_result.value());
+    last_run_status = RunServerBriefly(loaded_config_result.value(),
+                                       mqtt_config_result.value());
     if (last_run_status.ok()) {
       return 0;
     }

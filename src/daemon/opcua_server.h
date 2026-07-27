@@ -4,17 +4,19 @@
 #include <atomic>
 
 #include "common/result.h"
+#include "config/mqtt_config.h"
 #include "config/server_config.h"
 
 namespace opcua {
 
 class OpcuaServer {
  public:
-  explicit OpcuaServer(ServerConfig config);
+  OpcuaServer(ServerConfig server_config, MqttConfig mqtt_config);
   Status Run(std::atomic_bool* running);
 
  private:
-  ServerConfig config_;
+  ServerConfig server_config_;
+  MqttConfig mqtt_config_;
 };
 
 }  // namespace opcua
