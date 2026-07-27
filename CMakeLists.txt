@@ -25,6 +25,7 @@ endif()
 
 add_library(opcua_config
   src/config/server_config.cc
+  src/config/mqtt_config.cc
   src/config/sqlite_db.cc
   src/config/config_repository.cc
 )
@@ -76,6 +77,13 @@ if(OPCUA_BUILD_TESTS)
   target_link_libraries(config_validation_test PRIVATE opcua_config)
   opcua_target_warnings(config_validation_test)
   add_test(NAME config_validation_test COMMAND config_validation_test)
+
+  add_executable(mqtt_config_validation_test
+    tests/mqtt_config_validation_test.cc
+  )
+  target_link_libraries(mqtt_config_validation_test PRIVATE opcua_config)
+  opcua_target_warnings(mqtt_config_validation_test)
+  add_test(NAME mqtt_config_validation_test COMMAND mqtt_config_validation_test)
 
   add_executable(config_repository_test tests/config_repository_test.cc)
   target_link_libraries(config_repository_test PRIVATE opcua_config)
