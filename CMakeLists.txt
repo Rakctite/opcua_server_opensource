@@ -39,6 +39,15 @@ if(WIN32)
   target_link_libraries(open62541_static PUBLIC ws2_32 iphlpapi)
 endif()
 
+set(PAHO_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(PAHO_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(PAHO_WITH_SSL OFF CACHE BOOL "" FORCE)
+set(PAHO_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(PAHO_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(PAHO_ENABLE_CPACK OFF CACHE BOOL "" FORCE)
+set(PAHO_HIGH_PERFORMANCE ON CACHE BOOL "" FORCE)
+add_subdirectory(third_party/paho.mqtt.c EXCLUDE_FROM_ALL)
+
 add_library(opcua_daemon_lib
   src/daemon/mqtt_payload_parser.cc
   src/daemon/opcua_server.cc
@@ -46,6 +55,7 @@ add_library(opcua_daemon_lib
   src/daemon/realtime_value_store.cc
 )
 target_link_libraries(opcua_daemon_lib PUBLIC opcua_common opcua_config open62541_static)
+target_link_libraries(opcua_daemon_lib PRIVATE paho-mqtt3a-static)
 opcua_target_warnings(opcua_daemon_lib)
 
 add_library(cpp_httplib INTERFACE)
