@@ -55,6 +55,7 @@ target_link_libraries(cpp_httplib INTERFACE "$<$<PLATFORM_ID:Windows>:ws2_32>")
 add_library(opcua_supervisor_lib
   src/supervisor/process_controller.cc
   src/supervisor/api_server.cc
+  src/supervisor/config_json_codec.cc
   src/supervisor/supervisor_exit.cc
   src/supervisor/supervisor_options.cc
 )

@@ -1,13 +1,16 @@
 #include "config/config_repository.h"
 #include "supervisor/api_server.h"
+#include "supervisor/config_json_codec.h"
 #include "supervisor/process_controller.h"
 
 #include <httplib.h>
 
 #include <chrono>
 #include <cstdio>
+#include <cstdint>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -38,6 +41,41 @@ int Expect(bool condition, const std::string& message) {
     return 1;
   }
   return 0;
+}
+
+int TestMqttConfigJsonCodecSupportsUint32MaxNodeId() {
+  const std::string json =
+      "{\"enabled\":true,\"broker_uri\":\"tcp://127.0.0.1:1883\","
+      "\"client_id\":\"codec-test\",\"topic\":\"test/temperature\","
+      "\"qos\":1,\"node_id\":4294967295,\"browse_name\":\"Temperature\","
+      "\"data_type\":\"double\",\"stale_timeout_ms\":5000}";
+  auto config_result = opcua::ParseMqttConfigJson(json);
+  if (int rc = Expect(config_result.ok(),
+                      "MQTT codec should parse UINT32_MAX node_id")) {
+    return rc;
+  }
+  if (int rc = Expect(config_result.value().node_id ==
+                          std::numeric_limits<std::uint32_t>::max(),
+                      "MQTT codec should preserve UINT32_MAX node_id")) {
+    return rc;
+  }
+  if (int rc = Expect(opcua::MqttConfigToJson(config_result.value()) == json,
+                      "MQTT codec serializer field order mismatch")) {
+    return rc;
+  }
+
+  std::string false_json = json;
+  false_json.replace(false_json.find("true"), 4, "false");
+  auto false_result = opcua::ParseMqttConfigJson(false_json);
+  if (int rc = Expect(false_result.ok() && !false_result.value().enabled,
+                      "MQTT codec should parse false")) {
+    return rc;
+  }
+
+  std::string overflow_json = json;
+  overflow_json.replace(overflow_json.find("4294967295"), 10, "4294967296");
+  return Expect(!opcua::ParseMqttConfigJson(overflow_json).ok(),
+                "MQTT codec should reject node_id above UINT32_MAX");
 }
 
 void RemoveDatabaseFiles(const std::string& db_path) {
@@ -346,6 +384,28 @@ int TestPutConfigRejectsInvalidJson(ApiFixture* fixture) {
   return ExpectBadPut(fixture, std::string(65537, ' '), "oversized JSON");
 }
 
+int TestPutConfigPreservesIntegerTokenErrors(ApiFixture* fixture) {
+  auto boolean_response = fixture->Client().Put(
+      "/api/v1/config", CompleteConfigJson("true"), "application/json");
+  auto null_response = fixture->Client().Put(
+      "/api/v1/config", CompleteConfigJson("null"), "application/json");
+  constexpr const char* kExpectedBody =
+      "{\"error\":\"expected JSON integer\"}";
+
+  int result = 0;
+  if (int rc = Expect(boolean_response && boolean_response->status == 400 &&
+                          boolean_response->body == kExpectedBody,
+                      "boolean server_port error body changed")) {
+    result = rc;
+  }
+  if (int rc = Expect(null_response && null_response->status == 400 &&
+                          null_response->body == kExpectedBody,
+                      "null server_port error body changed")) {
+    result = rc;
+  }
+  return result;
+}
+
 int TestDaemonLifecycle(ApiFixture* fixture) {
   auto start = fixture->Client().Post("/api/v1/daemon/start", "", "text/plain");
   if (int rc = Expect(start && start->status == 200,
@@ -485,6 +545,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  if (int rc = TestMqttConfigJsonCodecSupportsUint32MaxNodeId()) return rc;
+
   auto fixture = ApiFixture::Create(argv[1]);
   if (int rc = Expect(fixture != nullptr, "failed to create API fixture")) {
     return rc;
@@ -501,6 +563,9 @@ int main(int argc, char** argv) {
   if (int rc = TestOversizedPayloadRejectedByTransport(fixture.get())) return rc;
   if (int rc = TestMaximumPayloadSizeAccepted(fixture.get())) return rc;
   if (int rc = TestPutConfigRejectsInvalidJson(fixture.get())) return rc;
+  if (int rc = TestPutConfigPreservesIntegerTokenErrors(fixture.get())) {
+    return rc;
+  }
   if (int rc = TestDaemonLifecycle(fixture.get())) return rc;
   if (int rc = TestStopBeforeRunReturnsPromptly(fixture.get())) return rc;
   if (int rc = TestImmediateStopAfterRunReturnsPromptly(fixture.get())) return rc;
