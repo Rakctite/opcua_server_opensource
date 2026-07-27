@@ -80,6 +80,14 @@ class ApiServer::Impl {
                 [this](const httplib::Request& req, httplib::Response& res) {
                   HandlePutConfig(req, &res);
                 });
+    server_.Get("/api/v1/mqtt-config",
+                [this](const httplib::Request&, httplib::Response& res) {
+                  HandleGetMqttConfig(&res);
+                });
+    server_.Put("/api/v1/mqtt-config",
+                [this](const httplib::Request& req, httplib::Response& res) {
+                  HandlePutMqttConfig(req, &res);
+                });
     server_.Post("/api/v1/daemon/start",
                  [this](const httplib::Request&, httplib::Response& res) {
                    HandleStart(&res);
@@ -176,6 +184,33 @@ class ApiServer::Impl {
 
     std::lock_guard<std::mutex> lock(operations_mutex_);
     auto save_status = repository_->Save(config_result.value());
+    if (!save_status.ok()) {
+      SetError(response, 500, save_status.message());
+      return;
+    }
+    SetJson(response, 200, "{\"status\":\"ok\"}");
+  }
+
+  void HandleGetMqttConfig(httplib::Response* response) {
+    std::lock_guard<std::mutex> lock(operations_mutex_);
+    auto config_result = repository_->LoadMqtt();
+    if (!config_result.ok()) {
+      SetError(response, 500, config_result.status().message());
+      return;
+    }
+    SetJson(response, 200, MqttConfigToJson(config_result.value()));
+  }
+
+  void HandlePutMqttConfig(const httplib::Request& request,
+                           httplib::Response* response) {
+    auto config_result = ParseMqttConfigJson(request.body);
+    if (!config_result.ok()) {
+      SetError(response, 400, config_result.status().message());
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(operations_mutex_);
+    auto save_status = repository_->SaveMqtt(config_result.value());
     if (!save_status.ok()) {
       SetError(response, 500, save_status.message());
       return;

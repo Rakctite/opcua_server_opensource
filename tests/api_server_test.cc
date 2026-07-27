@@ -84,6 +84,19 @@ void RemoveDatabaseFiles(const std::string& db_path) {
   std::remove((db_path + "-shm").c_str());
 }
 
+class DatabaseFilesCleanup {
+ public:
+  explicit DatabaseFilesCleanup(std::string db_path)
+      : db_path_(std::move(db_path)) {}
+  ~DatabaseFilesCleanup() { RemoveDatabaseFiles(db_path_); }
+
+  DatabaseFilesCleanup(const DatabaseFilesCleanup&) = delete;
+  DatabaseFilesCleanup& operator=(const DatabaseFilesCleanup&) = delete;
+
+ private:
+  std::string db_path_;
+};
+
 bool HasJsonContentType(const httplib::Result& response) {
   if (!response) {
     return false;
@@ -108,6 +121,17 @@ std::string CompleteConfigJson(const std::string& port = "4850") {
          "\"logging_target\":\"file:C:\\\\logs\\\\opcua.log\","
          "\"address_space_mode\":\"builtin\","
          "\"address_space_path\":\"path\\u0020with\\u0020spaces\"}";
+}
+
+std::string CompleteMqttJson(const std::string& enabled = "true",
+                             const std::string& node_id = "2001") {
+  return "{\"enabled\":" + enabled +
+         ",\"broker_uri\":\"tcp://127.0.0.1:2883\","
+         "\"client_id\":\"test-client\","
+         "\"topic\":\"test/temperature\",\"qos\":1,\"node_id\":" +
+         node_id +
+         ",\"browse_name\":\"Temperature\",\"data_type\":\"double\","
+         "\"stale_timeout_ms\":2500}";
 }
 
 class ApiFixture {
@@ -137,7 +161,6 @@ class ApiFixture {
       server_thread_.join();
     }
     (void)controller_.Stop(std::chrono::milliseconds(2000));
-    RemoveDatabaseFiles(db_path_);
   }
 
   ApiFixture(const ApiFixture&) = delete;
@@ -185,11 +208,11 @@ class ApiFixture {
  private:
   ApiFixture(std::string db_path, opcua::ConfigRepository repository,
              const std::string& child_path)
-      : db_path_(std::move(db_path)),
+      : database_cleanup_(std::move(db_path)),
         repository_(std::move(repository)),
         controller_(child_path, {}) {}
 
-  std::string db_path_;
+  DatabaseFilesCleanup database_cleanup_;
   opcua::ConfigRepository repository_;
   opcua::ProcessController controller_;
   std::unique_ptr<opcua::ApiServer> server_;
@@ -384,6 +407,181 @@ int TestPutConfigRejectsInvalidJson(ApiFixture* fixture) {
   return ExpectBadPut(fixture, std::string(65537, ' '), "oversized JSON");
 }
 
+int TestGetDefaultMqttConfig(ApiFixture* fixture) {
+  auto response = fixture->Client().Get("/api/v1/mqtt-config");
+  if (int rc = Expect(response && response->status == 200,
+                      "GET default MQTT config should return 200, got " +
+                          (response ? std::to_string(response->status)
+                                    : "no response"))) {
+    return rc;
+  }
+  const std::string expected =
+      "{\"enabled\":false,\"broker_uri\":\"tcp://127.0.0.1:1883\","
+      "\"client_id\":\"opcua-server\",\"topic\":\"test/temperature\","
+      "\"qos\":1,\"node_id\":1001,\"browse_name\":\"Temperature\","
+      "\"data_type\":\"double\",\"stale_timeout_ms\":5000}";
+  if (int rc = Expect(response->body == expected,
+                      "GET should return exact default MQTT config JSON")) {
+    return rc;
+  }
+  return Expect(HasJsonContentType(response),
+                "GET default MQTT config should return application/json");
+}
+
+int TestGetDefaultMqttConfigOnFreshRepository(const std::string& child_path) {
+  auto fixture = ApiFixture::Create(child_path);
+  if (int rc = Expect(fixture != nullptr,
+                      "failed to create default MQTT API fixture")) {
+    return rc;
+  }
+  if (int rc = Expect(fixture->Start(),
+                      "failed to bind default MQTT API test server")) {
+    return rc;
+  }
+  return TestGetDefaultMqttConfig(fixture.get());
+}
+
+int TestPutMqttConfigPersistsCompleteObject(ApiFixture* fixture) {
+  const std::string mqtt_json = CompleteMqttJson();
+  auto response = fixture->Client().Put("/api/v1/mqtt-config", mqtt_json,
+                                        "application/json");
+  if (int rc = Expect(response && response->status == 200,
+                      "valid PUT MQTT config should return 200")) {
+    return rc;
+  }
+  if (int rc = Expect(response->body == "{\"status\":\"ok\"}",
+                      "valid PUT MQTT config body mismatch")) {
+    return rc;
+  }
+  if (int rc = Expect(HasJsonContentType(response),
+                      "valid PUT MQTT config should return application/json")) {
+    return rc;
+  }
+
+  auto get_response = fixture->Client().Get("/api/v1/mqtt-config");
+  if (int rc = Expect(get_response && get_response->status == 200,
+                      "GET persisted MQTT config should return 200")) {
+    return rc;
+  }
+  return Expect(get_response->body == mqtt_json,
+                "GET should return byte-exact persisted MQTT config JSON");
+}
+
+int ExpectBadMqttPut(ApiFixture* fixture, const std::string& body,
+                     const std::string& description) {
+  auto response = fixture->Client().Put("/api/v1/mqtt-config", body,
+                                        "application/json");
+  if (int rc = Expect(response && response->status == 400,
+                      description + " should return 400")) {
+    return rc;
+  }
+  return Expect(HasJsonContentType(response),
+                description + " should return application/json");
+}
+
+int TestPutMqttConfigRejectsInvalidInput(ApiFixture* fixture) {
+  const std::string persisted = CompleteMqttJson();
+  auto seed_response = fixture->Client().Put(
+      "/api/v1/mqtt-config", persisted, "application/json");
+  if (int rc = Expect(seed_response && seed_response->status == 200 &&
+                          seed_response->body == "{\"status\":\"ok\"}",
+                      "MQTT invalid-input test should seed persisted config")) {
+    return rc;
+  }
+
+  std::string invalid_broker = persisted;
+  invalid_broker.replace(invalid_broker.find("tcp://127.0.0.1:2883"), 20,
+                         "http://bad");
+  if (int rc = ExpectBadMqttPut(fixture, invalid_broker,
+                                "invalid MQTT broker URI")) {
+    return rc;
+  }
+  auto get_response = fixture->Client().Get("/api/v1/mqtt-config");
+  if (int rc = Expect(get_response && get_response->status == 200 &&
+                          get_response->body == persisted,
+                      "invalid MQTT PUT should preserve persisted config")) {
+    return rc;
+  }
+
+  std::string missing = persisted;
+  const std::string stale_timeout = ",\"stale_timeout_ms\":2500";
+  missing.erase(missing.find(stale_timeout), stale_timeout.size());
+  if (int rc = ExpectBadMqttPut(fixture, missing,
+                                "missing MQTT stale_timeout_ms")) {
+    return rc;
+  }
+
+  std::string duplicate = persisted;
+  duplicate.insert(1, "\"enabled\":true,");
+  if (int rc = ExpectBadMqttPut(fixture, duplicate,
+                                "duplicate MQTT enabled")) {
+    return rc;
+  }
+
+  std::string unknown = persisted;
+  unknown.insert(1, "\"unknown\":1,");
+  if (int rc = ExpectBadMqttPut(fixture, unknown, "unknown MQTT field")) {
+    return rc;
+  }
+
+  std::string numeric_enabled = persisted;
+  numeric_enabled.replace(numeric_enabled.find("true"), 4, "1");
+  if (int rc = ExpectBadMqttPut(fixture, numeric_enabled,
+                                "numeric MQTT enabled")) {
+    return rc;
+  }
+
+  std::string nul_client_id = persisted;
+  nul_client_id.replace(nul_client_id.find("test-client"), 11,
+                        "test\\u0000client");
+  if (int rc = ExpectBadMqttPut(fixture, nul_client_id,
+                                "MQTT client_id containing NUL")) {
+    return rc;
+  }
+
+  return ExpectBadMqttPut(fixture, std::string(65537, ' '),
+                          "oversized MQTT JSON");
+}
+
+int TestMqttConfigHttpBoundaries(ApiFixture* fixture) {
+  const std::string maximum = CompleteMqttJson("true", "4294967295");
+  auto response = fixture->Client().Put("/api/v1/mqtt-config", maximum,
+                                        "application/json");
+  if (int rc = Expect(response && response->status == 200,
+                      "UINT32_MAX MQTT node_id should be accepted")) {
+    return rc;
+  }
+  auto get_response = fixture->Client().Get("/api/v1/mqtt-config");
+  if (int rc = Expect(get_response && get_response->status == 200 &&
+                          get_response->body == maximum,
+                      "UINT32_MAX MQTT node_id should round-trip")) {
+    return rc;
+  }
+
+  if (int rc = ExpectBadMqttPut(
+          fixture, CompleteMqttJson("true", "4294967296"),
+          "MQTT node_id above UINT32_MAX")) {
+    return rc;
+  }
+  if (int rc = ExpectBadMqttPut(fixture,
+                                CompleteMqttJson("true", "-1"),
+                                "negative MQTT node_id")) {
+    return rc;
+  }
+
+  const std::string disabled = CompleteMqttJson("false", "2001");
+  response = fixture->Client().Put("/api/v1/mqtt-config", disabled,
+                                   "application/json");
+  if (int rc = Expect(response && response->status == 200,
+                      "false MQTT enabled should be accepted")) {
+    return rc;
+  }
+  get_response = fixture->Client().Get("/api/v1/mqtt-config");
+  return Expect(get_response && get_response->status == 200 &&
+                    get_response->body == disabled,
+                "false MQTT enabled should round-trip");
+}
+
 int TestPutConfigPreservesIntegerTokenErrors(ApiFixture* fixture) {
   auto boolean_response = fixture->Client().Put(
       "/api/v1/config", CompleteConfigJson("true"), "application/json");
@@ -547,6 +745,8 @@ int main(int argc, char** argv) {
 
   if (int rc = TestMqttConfigJsonCodecSupportsUint32MaxNodeId()) return rc;
 
+  if (int rc = TestGetDefaultMqttConfigOnFreshRepository(argv[1])) return rc;
+
   auto fixture = ApiFixture::Create(argv[1]);
   if (int rc = Expect(fixture != nullptr, "failed to create API fixture")) {
     return rc;
@@ -559,6 +759,11 @@ int main(int argc, char** argv) {
   if (int rc = TestStatus(fixture.get())) return rc;
   if (int rc = TestGetConfig(fixture.get())) return rc;
   if (int rc = TestPutConfigPersistsCompleteObject(fixture.get())) return rc;
+  if (int rc = TestPutMqttConfigPersistsCompleteObject(fixture.get())) {
+    return rc;
+  }
+  if (int rc = TestPutMqttConfigRejectsInvalidInput(fixture.get())) return rc;
+  if (int rc = TestMqttConfigHttpBoundaries(fixture.get())) return rc;
   if (int rc = TestPutConfigRejectsNul(fixture.get())) return rc;
   if (int rc = TestOversizedPayloadRejectedByTransport(fixture.get())) return rc;
   if (int rc = TestMaximumPayloadSizeAccepted(fixture.get())) return rc;
