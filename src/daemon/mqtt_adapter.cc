@@ -18,6 +18,10 @@ Status PahoError(const char* operation, int rc) {
                        std::to_string(rc));
 }
 
+int FailureCode(const MQTTAsync_failureData* response) {
+  return response == nullptr ? 0 : response->code;
+}
+
 std::string_view TopicView(char* topic_name, int topic_length) {
   if (topic_name == nullptr) {
     return {};
@@ -92,6 +96,9 @@ Status MqttAdapter::Start() {
   options.automaticReconnect = 1;
   options.minRetryInterval = 1;
   options.maxRetryInterval = 60;
+  options.context = this;
+  options.onSuccess = &MqttAdapter::ConnectSucceeded;
+  options.onFailure = &MqttAdapter::ConnectFailed;
 
   {
     std::lock_guard<std::mutex> lock(health_mutex_);
@@ -110,8 +117,6 @@ Status MqttAdapter::Start() {
 }
 
 void MqttAdapter::Stop() {
-  accepting_.store(false);
-
   {
     std::lock_guard<std::mutex> lock(health_mutex_);
     watchdog_stop_ = true;
@@ -122,18 +127,35 @@ void MqttAdapter::Stop() {
   }
 
   if (client_ != nullptr) {
-    MQTTAsync_setCallbacks(client_, nullptr, nullptr, nullptr, nullptr);
-    MQTTAsync_setConnected(client_, nullptr, nullptr);
-
-    {
-      std::unique_lock<std::mutex> lock(callback_mutex_);
-      callback_drained_.wait(lock, [this] { return active_callbacks_ == 0; });
+    int rc = MQTTAsync_setCallbacks(client_, nullptr,
+                                    &MqttAdapter::NoopConnectionLost,
+                                    &MqttAdapter::NoopMessageArrived, nullptr);
+    if (rc != MQTTASYNC_SUCCESS) {
+      std::cerr << "MQTT callback teardown failed with MQTTAsync rc=" << rc
+                << "\n";
     }
+    rc = MQTTAsync_setConnected(client_, nullptr, &MqttAdapter::NoopConnected);
+    if (rc != MQTTASYNC_SUCCESS) {
+      std::cerr << "MQTT connected callback teardown failed with MQTTAsync rc="
+                << rc << "\n";
+    }
+  }
 
+  accepting_.store(false);
+
+  {
+    std::unique_lock<std::mutex> lock(callback_mutex_);
+    callback_drained_.wait(lock, [this] { return active_callbacks_ == 0; });
+  }
+
+  if (client_ != nullptr) {
     if (MQTTAsync_isConnected(client_)) {
       MQTTAsync_disconnectOptions options =
           MQTTAsync_disconnectOptions_initializer;
-      MQTTAsync_disconnect(client_, &options);
+      const int rc = MQTTAsync_disconnect(client_, &options);
+      if (rc != MQTTASYNC_SUCCESS) {
+        std::cerr << "MQTT disconnect failed with MQTTAsync rc=" << rc << "\n";
+      }
     }
     MQTTAsync_destroy(&client_);
     client_ = nullptr;
@@ -161,6 +183,14 @@ Status MqttAdapter::AcceptMessage(std::string_view topic,
     if (!snapshot.ok()) {
       return snapshot.status();
     }
+    if (snapshot.value().status == UA_STATUSCODE_BADOUTOFSERVICE) {
+      return Status::Error("MQTT value store update rejected: slot disabled");
+    }
+    if (snapshot.value().type != type_) {
+      return Status::Error(
+          "MQTT value store update rejected: value type does not match slot");
+    }
+    return Status::Error("MQTT value store update rejected");
   }
   store_->SetSourceConnected();
 
@@ -205,13 +235,7 @@ void MqttAdapter::Connected(void* context, char* /*cause*/) {
     return;
   }
 
-  adapter->store_->SetSourceConnected();
-  const int rc = MQTTAsync_subscribe(adapter->client_,
-                                     adapter->config_.topic.c_str(), kMqttQos,
-                                     nullptr);
-  if (rc != MQTTASYNC_SUCCESS) {
-    std::cerr << "MQTT subscribe failed with MQTTAsync rc=" << rc << "\n";
-  }
+  adapter->StartSubscribe();
   adapter->LeaveCallback();
 }
 
@@ -243,6 +267,60 @@ int MqttAdapter::MessageArrived(void* context, char* topic_name,
   return 1;
 }
 
+void MqttAdapter::ConnectSucceeded(void* context,
+                                   MQTTAsync_successData* /*response*/) {
+  MqttAdapter* adapter = static_cast<MqttAdapter*>(context);
+  if (adapter == nullptr || !adapter->EnterCallback()) {
+    return;
+  }
+  adapter->StartSubscribe();
+  adapter->LeaveCallback();
+}
+
+void MqttAdapter::ConnectFailed(void* context, MQTTAsync_failureData* response) {
+  MqttAdapter* adapter = static_cast<MqttAdapter*>(context);
+  if (adapter == nullptr || !adapter->EnterCallback()) {
+    return;
+  }
+  adapter->NotifyConnectionLost();
+  std::cerr << "MQTT connect failed with MQTTAsync rc=" << FailureCode(response)
+            << "\n";
+  adapter->LeaveCallback();
+}
+
+void MqttAdapter::SubscribeSucceeded(void* context,
+                                     MQTTAsync_successData* /*response*/) {
+  MqttAdapter* adapter = static_cast<MqttAdapter*>(context);
+  if (adapter == nullptr || !adapter->EnterCallback()) {
+    return;
+  }
+  adapter->store_->SetSourceConnected();
+  adapter->LeaveCallback();
+}
+
+void MqttAdapter::SubscribeFailed(void* context,
+                                  MQTTAsync_failureData* response) {
+  MqttAdapter* adapter = static_cast<MqttAdapter*>(context);
+  if (adapter == nullptr || !adapter->EnterCallback()) {
+    return;
+  }
+  adapter->NotifyConnectionLost();
+  std::cerr << "MQTT subscribe failed with MQTTAsync rc="
+            << FailureCode(response) << "\n";
+  adapter->LeaveCallback();
+}
+
+void MqttAdapter::NoopConnected(void*, char*) {}
+
+void MqttAdapter::NoopConnectionLost(void*, char*) {}
+
+int MqttAdapter::NoopMessageArrived(void*, char* topic_name, int,
+                                    MQTTAsync_message* message) {
+  MQTTAsync_freeMessage(&message);
+  MQTTAsync_free(topic_name);
+  return 1;
+}
+
 bool MqttAdapter::EnterCallback() {
   std::lock_guard<std::mutex> lock(callback_mutex_);
   if (!accepting_.load()) {
@@ -257,6 +335,20 @@ void MqttAdapter::LeaveCallback() {
   --active_callbacks_;
   if (active_callbacks_ == 0) {
     callback_drained_.notify_all();
+  }
+}
+
+void MqttAdapter::StartSubscribe() {
+  MQTTAsync_responseOptions options = MQTTAsync_responseOptions_initializer;
+  options.context = this;
+  options.onSuccess = &MqttAdapter::SubscribeSucceeded;
+  options.onFailure = &MqttAdapter::SubscribeFailed;
+
+  const int rc = MQTTAsync_subscribe(client_, config_.topic.c_str(), kMqttQos,
+                                     &options);
+  if (rc != MQTTASYNC_SUCCESS) {
+    NotifyConnectionLost();
+    std::cerr << "MQTT subscribe failed with MQTTAsync rc=" << rc << "\n";
   }
 }
 

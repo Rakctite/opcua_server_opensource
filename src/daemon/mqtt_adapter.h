@@ -43,14 +43,26 @@ class MqttAdapter {
 
  private:
   friend int MqttAdapterCallbackParseFailuresUseAggregateLogOnlyForTest();
+  friend int MqttAdapterSubscribeFailureLeavesSourceDisconnectedForTest();
+  friend int MqttAdapterSubscribeCallbacksUpdateSourceHealthForTest();
 
   static void Connected(void* context, char* cause);
   static void ConnectionLost(void* context, char* cause);
   static int MessageArrived(void* context, char* topic_name, int topic_length,
                             MQTTAsync_message* message);
+  static void ConnectSucceeded(void* context, MQTTAsync_successData* response);
+  static void ConnectFailed(void* context, MQTTAsync_failureData* response);
+  static void SubscribeSucceeded(void* context,
+                                 MQTTAsync_successData* response);
+  static void SubscribeFailed(void* context, MQTTAsync_failureData* response);
+  static void NoopConnected(void* context, char* cause);
+  static void NoopConnectionLost(void* context, char* cause);
+  static int NoopMessageArrived(void* context, char* topic_name,
+                                int topic_length, MQTTAsync_message* message);
 
   bool EnterCallback();
   void LeaveCallback();
+  void StartSubscribe();
   void WatchdogLoop();
   void ReportParseFailure();
 

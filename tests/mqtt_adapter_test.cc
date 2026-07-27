@@ -99,6 +99,54 @@ int TestBrokerFreeStateTransitions() {
       "bad payload should be rejected");
 }
 
+int TestRejectedStoreUpdatesAreErrors() {
+  {
+    opcua::RealtimeValueStore store;
+    const auto slot = store.AddSlot(opcua::ScalarType::kDouble, false);
+    auto config = opcua::MqttConfig::Default();
+    config.enabled = true;
+
+    opcua::MqttAdapter adapter(config, opcua::ScalarType::kDouble, &store,
+                               slot);
+    if (int rc = Expect(!adapter.AcceptMessage(config.topic, "37.5",
+                                               UA_DateTime_now())
+                             .ok(),
+                         "disabled slot update should be rejected")) {
+      return rc;
+    }
+    if (int rc =
+            Expect(store.ReadSourceHealth().connection_state !=
+                       opcua::SourceConnectionState::kConnected,
+                   "disabled slot update should not mark source connected")) {
+      return rc;
+    }
+  }
+
+  {
+    opcua::RealtimeValueStore store;
+    const auto slot = store.AddSlot(opcua::ScalarType::kInt64);
+    auto config = opcua::MqttConfig::Default();
+    config.enabled = true;
+
+    opcua::MqttAdapter adapter(config, opcua::ScalarType::kDouble, &store,
+                               slot);
+    if (int rc = Expect(!adapter.AcceptMessage(config.topic, "37.5",
+                                               UA_DateTime_now())
+                             .ok(),
+                         "type mismatched slot update should be rejected")) {
+      return rc;
+    }
+    if (int rc =
+            Expect(store.ReadSourceHealth().connection_state !=
+                       opcua::SourceConnectionState::kConnected,
+                   "type mismatched update should not mark source connected")) {
+      return rc;
+    }
+  }
+
+  return 0;
+}
+
 }  // namespace
 
 namespace opcua {
@@ -148,12 +196,89 @@ int MqttAdapterCallbackParseFailuresUseAggregateLogOnlyForTest() {
                 "parse failure log should not include payload contents");
 }
 
+int MqttAdapterSubscribeFailureLeavesSourceDisconnectedForTest() {
+  opcua::RealtimeValueStore store;
+  const auto slot = store.AddSlot(opcua::ScalarType::kDouble);
+  auto config = opcua::MqttConfig::Default();
+  config.enabled = true;
+
+  opcua::MqttAdapter adapter(config, opcua::ScalarType::kDouble, &store, slot);
+  if (int rc = MQTTAsync_create(&adapter.client_, config.broker_uri.c_str(),
+                                config.client_id.c_str(),
+                                MQTTCLIENT_PERSISTENCE_NONE, nullptr);
+      rc != MQTTASYNC_SUCCESS) {
+    return Expect(false, "test setup should create MQTT client");
+  }
+  adapter.accepting_.store(true);
+
+  std::ostringstream captured;
+  auto* const old_cerr = std::cerr.rdbuf(captured.rdbuf());
+  opcua::MqttAdapter::Connected(&adapter, nullptr);
+  std::cerr.rdbuf(old_cerr);
+
+  const auto health = store.ReadSourceHealth();
+  adapter.Stop();
+  return Expect(health.connection_state ==
+                    opcua::SourceConnectionState::kDisconnected,
+                "subscribe failure should leave source disconnected");
+}
+
+int MqttAdapterSubscribeCallbacksUpdateSourceHealthForTest() {
+  opcua::RealtimeValueStore store;
+  const auto slot = store.AddSlot(opcua::ScalarType::kDouble);
+  auto config = opcua::MqttConfig::Default();
+  config.enabled = true;
+
+  opcua::MqttAdapter adapter(config, opcua::ScalarType::kDouble, &store, slot);
+  opcua::MqttAdapter::SubscribeSucceeded(&adapter, nullptr);
+  if (int rc =
+          Expect(store.ReadSourceHealth().connection_state !=
+                     opcua::SourceConnectionState::kConnected,
+                 "subscribe success callback should ignore stopped adapter")) {
+    return rc;
+  }
+
+  adapter.accepting_.store(true);
+  opcua::MqttAdapter::SubscribeSucceeded(&adapter, nullptr);
+  if (int rc =
+          Expect(store.ReadSourceHealth().connection_state ==
+                     opcua::SourceConnectionState::kConnected,
+                 "subscribe success callback should mark source connected")) {
+    return rc;
+  }
+
+  MQTTAsync_failureData failure{};
+  failure.code = 42;
+  std::ostringstream captured;
+  auto* const old_cerr = std::cerr.rdbuf(captured.rdbuf());
+  opcua::MqttAdapter::SubscribeFailed(&adapter, &failure);
+  std::cerr.rdbuf(old_cerr);
+
+  const auto health = store.ReadSourceHealth();
+  if (int rc = Expect(health.connection_state ==
+                          opcua::SourceConnectionState::kDisconnected,
+                      "subscribe failure callback should mark disconnected")) {
+    return rc;
+  }
+  return Expect(captured.str().find("42") != std::string::npos,
+                "subscribe failure callback should log MQTT return code");
+}
+
 }  // namespace opcua
 
 int main() {
   if (int rc = TestBrokerFreeStateTransitions()) return rc;
+  if (int rc = TestRejectedStoreUpdatesAreErrors()) return rc;
   if (int rc =
           opcua::MqttAdapterCallbackParseFailuresUseAggregateLogOnlyForTest()) {
+    return rc;
+  }
+  if (int rc =
+          opcua::MqttAdapterSubscribeFailureLeavesSourceDisconnectedForTest()) {
+    return rc;
+  }
+  if (int rc =
+          opcua::MqttAdapterSubscribeCallbacksUpdateSourceHealthForTest()) {
     return rc;
   }
   return 0;
