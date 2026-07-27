@@ -41,6 +41,7 @@ endif()
 
 add_library(opcua_daemon_lib
   src/daemon/opcua_server.cc
+  src/daemon/realtime_value_store.cc
 )
 target_link_libraries(opcua_daemon_lib PUBLIC opcua_common opcua_config open62541_static)
 opcua_target_warnings(opcua_daemon_lib)
@@ -102,6 +103,13 @@ if(OPCUA_BUILD_TESTS)
   target_link_libraries(daemon_smoke_test PRIVATE opcua_daemon_lib)
   opcua_target_warnings(daemon_smoke_test)
   add_test(NAME daemon_smoke_test COMMAND daemon_smoke_test)
+
+  add_executable(realtime_value_store_test
+    tests/realtime_value_store_test.cc
+  )
+  target_link_libraries(realtime_value_store_test PRIVATE opcua_daemon_lib)
+  opcua_target_warnings(realtime_value_store_test)
+  add_test(NAME realtime_value_store_test COMMAND realtime_value_store_test)
 
   add_executable(test_child tests/test_child/main.cc)
   opcua_target_warnings(test_child)
