@@ -151,6 +151,47 @@ int TestRejectedStoreUpdatesAreErrors() {
 
 namespace opcua {
 
+int MqttAdapterDuplicatePayloadRefreshesLastValidMessageForTest() {
+  opcua::RealtimeValueStore store;
+  const auto slot = store.AddSlot(opcua::ScalarType::kDouble);
+  auto config = opcua::MqttConfig::Default();
+  config.enabled = true;
+  config.stale_timeout_ms = 50;
+
+  opcua::MqttAdapter adapter(config, opcua::ScalarType::kDouble, &store, slot);
+  if (int rc = Expect(adapter.AcceptMessage(config.topic, "37.5", 100).ok(),
+                      "initial valid message should be accepted")) {
+    return rc;
+  }
+
+  const auto old_message_time =
+      std::chrono::steady_clock::now() - std::chrono::hours(1);
+  {
+    std::lock_guard<std::mutex> lock(adapter.health_mutex_);
+    adapter.last_valid_message_ = old_message_time;
+  }
+
+  if (int rc = Expect(adapter.AcceptMessage(config.topic, "37.5", 200).ok(),
+                      "unchanged duplicate message should be accepted")) {
+    return rc;
+  }
+  if (int rc =
+          Expect(store.ReadSourceHealth().connection_state ==
+                     opcua::SourceConnectionState::kConnected,
+                 "unchanged duplicate should mark source connected")) {
+    return rc;
+  }
+
+  adapter.PollHealth(old_message_time + std::chrono::milliseconds(100));
+  const auto snapshot = store.ReadSnapshot(slot).value();
+  if (int rc = Expect(snapshot.status == UA_STATUSCODE_GOOD,
+                      "duplicate refresh should prevent stale health poll")) {
+    return rc;
+  }
+  return Expect(snapshot.source_timestamp == 200,
+                "unchanged duplicate should refresh source timestamp");
+}
+
 int MqttAdapterCallbackParseFailuresUseAggregateLogOnlyForTest() {
   opcua::RealtimeValueStore store;
   const auto slot = store.AddSlot(opcua::ScalarType::kDouble);
@@ -269,6 +310,10 @@ int MqttAdapterSubscribeCallbacksUpdateSourceHealthForTest() {
 int main() {
   if (int rc = TestBrokerFreeStateTransitions()) return rc;
   if (int rc = TestRejectedStoreUpdatesAreErrors()) return rc;
+  if (int rc =
+          opcua::MqttAdapterDuplicatePayloadRefreshesLastValidMessageForTest()) {
+    return rc;
+  }
   if (int rc =
           opcua::MqttAdapterCallbackParseFailuresUseAggregateLogOnlyForTest()) {
     return rc;

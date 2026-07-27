@@ -183,14 +183,21 @@ Status MqttAdapter::AcceptMessage(std::string_view topic,
     if (!snapshot.ok()) {
       return snapshot.status();
     }
-    if (snapshot.value().status == UA_STATUSCODE_BADOUTOFSERVICE) {
+    const auto& current = snapshot.value();
+    const bool accepted_no_change =
+        current.has_value && current.status == UA_STATUSCODE_GOOD &&
+        current.type == type_ && current.value == value.value();
+    if (!accepted_no_change &&
+        current.status == UA_STATUSCODE_BADOUTOFSERVICE) {
       return Status::Error("MQTT value store update rejected: slot disabled");
     }
-    if (snapshot.value().type != type_) {
+    if (!accepted_no_change && current.type != type_) {
       return Status::Error(
           "MQTT value store update rejected: value type does not match slot");
     }
-    return Status::Error("MQTT value store update rejected");
+    if (!accepted_no_change) {
+      return Status::Error("MQTT value store update rejected");
+    }
   }
   store_->SetSourceConnected();
 

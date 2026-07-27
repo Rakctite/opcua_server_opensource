@@ -43,6 +43,7 @@ class MqttAdapter {
 
  private:
   friend int MqttAdapterCallbackParseFailuresUseAggregateLogOnlyForTest();
+  friend int MqttAdapterDuplicatePayloadRefreshesLastValidMessageForTest();
   friend int MqttAdapterSubscribeFailureLeavesSourceDisconnectedForTest();
   friend int MqttAdapterSubscribeCallbacksUpdateSourceHealthForTest();
 
