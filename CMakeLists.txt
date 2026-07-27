@@ -49,13 +49,18 @@ set(PAHO_HIGH_PERFORMANCE ON CACHE BOOL "" FORCE)
 add_subdirectory(third_party/paho.mqtt.c EXCLUDE_FROM_ALL)
 
 add_library(opcua_daemon_lib
+  src/daemon/mqtt_adapter.cc
   src/daemon/mqtt_payload_parser.cc
   src/daemon/opcua_server.cc
   src/daemon/realtime_address_space.cc
   src/daemon/realtime_value_store.cc
 )
-target_link_libraries(opcua_daemon_lib PUBLIC opcua_common opcua_config open62541_static)
-target_link_libraries(opcua_daemon_lib PRIVATE paho-mqtt3a-static)
+target_link_libraries(opcua_daemon_lib PUBLIC
+  opcua_common
+  opcua_config
+  open62541_static
+  paho-mqtt3a-static
+)
 opcua_target_warnings(opcua_daemon_lib)
 
 add_library(cpp_httplib INTERFACE)
@@ -129,6 +134,13 @@ if(OPCUA_BUILD_TESTS)
   target_link_libraries(mqtt_payload_parser_test PRIVATE opcua_daemon_lib)
   opcua_target_warnings(mqtt_payload_parser_test)
   add_test(NAME mqtt_payload_parser_test COMMAND mqtt_payload_parser_test)
+
+  add_executable(mqtt_adapter_test
+    tests/mqtt_adapter_test.cc
+  )
+  target_link_libraries(mqtt_adapter_test PRIVATE opcua_daemon_lib)
+  opcua_target_warnings(mqtt_adapter_test)
+  add_test(NAME mqtt_adapter_test COMMAND mqtt_adapter_test)
 
   add_executable(realtime_address_space_test
     tests/realtime_address_space_test.cc
