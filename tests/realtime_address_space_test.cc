@@ -586,6 +586,35 @@ int TestDiagnosticsTrackSourceHealthAndAreIdempotent() {
                 "idempotent diagnostics should remain readable");
 }
 
+int TestDiagnosticsReportDisabledSourceHealth() {
+  auto server = MakeServer();
+  opcua::RealtimeValueStore store;
+  const auto slot = store.AddSlot(opcua::ScalarType::kDouble, false);
+  store.SetSourceDisabled();
+  opcua::RealtimeAddressSpace address_space(&store);
+  if (int rc = Expect(address_space.AddNode(
+                          server.get(), {1451, "DisabledDiagnostics",
+                                         opcua::ScalarType::kDouble, slot})
+                          .ok(),
+                      "disabled diagnostics node add failed")) return rc;
+
+  UA_DataValue state =
+      Read(server.get(), StringNodeId("MqttSource.ConnectionState"));
+  UA_DataValue update =
+      Read(server.get(), StringNodeId("MqttSource.LastSuccessfulUpdate"));
+  UA_DataValue failures =
+      Read(server.get(), StringNodeId("MqttSource.ConsecutiveFailures"));
+  const UA_String disabled = UA_STRING(const_cast<char*>("disabled"));
+  const bool disabled_matches =
+      HasString(state, disabled) &&
+      HasScalar(update, &UA_TYPES[UA_TYPES_DATETIME], UA_DateTime{0}) &&
+      HasScalar(failures, &UA_TYPES[UA_TYPES_UINT32], UA_UInt32{0});
+  UA_DataValue_clear(&state);
+  UA_DataValue_clear(&update);
+  UA_DataValue_clear(&failures);
+  return Expect(disabled_matches, "disabled diagnostics mismatch");
+}
+
 int TestValidationDuplicateFailureAndContextLifetime() {
   auto server = MakeServer();
   opcua::RealtimeValueStore store;
@@ -740,6 +769,7 @@ int main() {
   if (int rc = TestEmptyGoodCallbackFallsBackToWaiting()) return rc;
   if (int rc = TestCallbackNodeAddReferenceFailureIsAtomic()) return rc;
   if (int rc = TestDiagnosticsTrackSourceHealthAndAreIdempotent()) return rc;
+  if (int rc = TestDiagnosticsReportDisabledSourceHealth()) return rc;
   if (int rc = TestValidationDuplicateFailureAndContextLifetime()) return rc;
   if (int rc = TestFailedFirstAddRollsBackDiagnosticsAndCanRetry()) return rc;
   return 0;

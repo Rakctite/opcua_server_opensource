@@ -315,6 +315,30 @@ int TestSourceHealth() {
                 "accepted no-change update should refresh health");
 }
 
+int TestDisabledSourceHealth() {
+  opcua::RealtimeValueStore store;
+  const auto id = store.AddSlot(opcua::ScalarType::kDouble, false);
+
+  store.SetSourceDisconnected();
+  if (int rc = Expect(store.ReadSourceHealth().consecutive_failures == 1,
+                      "setup disconnect should increment failures")) return rc;
+
+  store.SetSourceDisabled();
+  const auto health = store.ReadSourceHealth();
+  if (int rc = Expect(
+          health.connection_state == opcua::SourceConnectionState::kDisabled,
+          "disabled source state mismatch")) return rc;
+  if (int rc = Expect(health.consecutive_failures == 0,
+                      "disabled source should reset failures")) return rc;
+  if (int rc = Expect(health.last_successful_update == 0,
+                      "disabled source should not invent an update timestamp")) {
+    return rc;
+  }
+
+  return Expect(!store.Update(id, 12.0, 50),
+                "disabled slot should still reject updates");
+}
+
 int TestConcurrentReadAndWrite() {
   opcua::RealtimeValueStore store;
   const auto id = store.AddSlot(opcua::ScalarType::kDouble);
@@ -407,6 +431,7 @@ int main() {
   if (int rc = TestInvalidIds()) return rc;
   if (int rc = TestUnavailableBeforeValueAndRepeatedUnavailable()) return rc;
   if (int rc = TestSourceHealth()) return rc;
+  if (int rc = TestDisabledSourceHealth()) return rc;
   if (int rc = TestConcurrentReadAndWrite()) return rc;
   return 0;
 }

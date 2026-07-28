@@ -154,6 +154,12 @@ void RealtimeValueStore::SetSourceDisconnected() {
   }
 }
 
+void RealtimeValueStore::SetSourceDisabled() {
+  std::lock_guard<std::mutex> lock(source_health_mutex_);
+  source_health_.connection_state = SourceConnectionState::kDisabled;
+  source_health_.consecutive_failures = 0;
+}
+
 SourceHealthSnapshot RealtimeValueStore::ReadSourceHealth() const {
   std::lock_guard<std::mutex> lock(source_health_mutex_);
   return source_health_;

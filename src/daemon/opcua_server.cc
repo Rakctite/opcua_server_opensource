@@ -120,6 +120,9 @@ Status OpcuaServer::Run(std::atomic_bool* running) {
   {
     RealtimeValueStore value_store;
     const ValueSlotId slot = value_store.AddSlot(type, mqtt_config_.enabled);
+    if (!mqtt_config_.enabled) {
+      value_store.SetSourceDisabled();
+    }
     RealtimeAddressSpace address_space(&value_store);
 
     const RealtimeNodeConfig node_config{mqtt_config_.node_id,

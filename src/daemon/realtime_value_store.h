@@ -65,6 +65,7 @@ class RealtimeValueStore {
 
   void SetSourceConnected();
   void SetSourceDisconnected();
+  void SetSourceDisabled();
   SourceHealthSnapshot ReadSourceHealth() const;
 
  private:
