@@ -19,9 +19,11 @@ struct RealtimeNodeConfig {
 
 class RealtimeAddressSpace {
  public:
-  // The store and every server passed to AddNode must outlive this object.
+  // The store and every non-detached server passed to AddNode must outlive this
+  // object.
   explicit RealtimeAddressSpace(RealtimeValueStore* store);
   ~RealtimeAddressSpace() noexcept;
+  void DetachServer(UA_Server* server) noexcept;
   Status AddNode(UA_Server* server, const RealtimeNodeConfig& config);
 
  private:

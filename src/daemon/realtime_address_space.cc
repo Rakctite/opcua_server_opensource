@@ -94,6 +94,10 @@ RealtimeAddressSpace::~RealtimeAddressSpace() noexcept {
     if (*context == nullptr) {
       continue;
     }
+    if ((*context)->server == nullptr) {
+      context->reset();
+      continue;
+    }
 
     UA_NodeId node_id = UA_NODEID_NULL;
     switch ((*context)->kind) {
@@ -133,6 +137,14 @@ RealtimeAddressSpace::~RealtimeAddressSpace() noexcept {
       continue;
     }
     context->reset();
+  }
+}
+
+void RealtimeAddressSpace::DetachServer(UA_Server* server) noexcept {
+  for (auto& context : contexts_) {
+    if (context != nullptr && context->server == server) {
+      context->server = nullptr;
+    }
   }
 }
 

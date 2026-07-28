@@ -74,6 +74,27 @@ class ServerShutdown {
   UA_StatusCode shutdown_status_ = UA_STATUSCODE_GOOD;
 };
 
+class AddressSpaceServerDetach {
+ public:
+  AddressSpaceServerDetach(RealtimeAddressSpace* address_space,
+                           UA_Server* server)
+      : address_space_(address_space), server_(server) {}
+
+  AddressSpaceServerDetach(const AddressSpaceServerDetach&) = delete;
+  AddressSpaceServerDetach& operator=(const AddressSpaceServerDetach&) =
+      delete;
+
+  ~AddressSpaceServerDetach() {
+    if (address_space_ != nullptr) {
+      address_space_->DetachServer(server_);
+    }
+  }
+
+ private:
+  RealtimeAddressSpace* address_space_;
+  UA_Server* server_;
+};
+
 }  // namespace
 
 OpcuaServer::OpcuaServer(ServerConfig server_config, MqttConfig mqtt_config)
@@ -99,24 +120,6 @@ Status OpcuaServer::Run(std::atomic_bool* running) {
   }
   const ScalarType type = type_result.value();
 
-  ServerPtr server(UA_Server_new());
-  if (server == nullptr) {
-    return Status::Error("UA_Server_new failed");
-  }
-
-  UA_ServerConfig* server_config = UA_Server_getConfig(server.get());
-  if (server_config == nullptr) {
-    return Status::Error("UA_Server_getConfig failed");
-  }
-
-  const auto port = static_cast<UA_UInt16>(server_config_.server_port);
-  auto config_status = StatusFromOpen62541(
-      UA_ServerConfig_setMinimal(server_config, port, nullptr),
-      "UA_ServerConfig_setMinimal");
-  if (!config_status.ok()) {
-    return config_status;
-  }
-
   {
     RealtimeValueStore value_store;
     const ValueSlotId slot = value_store.AddSlot(type, mqtt_config_.enabled);
@@ -124,6 +127,26 @@ Status OpcuaServer::Run(std::atomic_bool* running) {
       value_store.SetSourceDisabled();
     }
     RealtimeAddressSpace address_space(&value_store);
+
+    ServerPtr server(UA_Server_new());
+    if (server == nullptr) {
+      return Status::Error("UA_Server_new failed");
+    }
+    AddressSpaceServerDetach detach_address_space(&address_space,
+                                                  server.get());
+
+    UA_ServerConfig* server_config = UA_Server_getConfig(server.get());
+    if (server_config == nullptr) {
+      return Status::Error("UA_Server_getConfig failed");
+    }
+
+    const auto port = static_cast<UA_UInt16>(server_config_.server_port);
+    auto config_status = StatusFromOpen62541(
+        UA_ServerConfig_setMinimal(server_config, port, nullptr),
+        "UA_ServerConfig_setMinimal");
+    if (!config_status.ok()) {
+      return config_status;
+    }
 
     const RealtimeNodeConfig node_config{mqtt_config_.node_id,
                                          mqtt_config_.browse_name, type, slot};

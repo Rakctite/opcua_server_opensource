@@ -118,6 +118,9 @@ if(OPCUA_BUILD_TESTS)
 
   add_executable(daemon_smoke_test tests/daemon_smoke_test.cc)
   target_link_libraries(daemon_smoke_test PRIVATE opcua_daemon_lib)
+  target_compile_definitions(daemon_smoke_test PRIVATE
+    OPCUA_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  )
   opcua_target_warnings(daemon_smoke_test)
   add_test(NAME daemon_smoke_test COMMAND daemon_smoke_test)
 

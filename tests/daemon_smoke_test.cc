@@ -5,7 +5,10 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <fstream>
+#include <initializer_list>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -57,9 +60,44 @@ opcua::Status RunServerBriefly(const opcua::ServerConfig& server_config,
   return run_status;
 }
 
+bool ContainsInOrder(const std::string& text,
+                     std::initializer_list<const char*> markers) {
+  std::size_t search_from = 0;
+  for (const char* marker : markers) {
+    const std::size_t pos = text.find(marker, search_from);
+    if (pos == std::string::npos) {
+      return false;
+    }
+    search_from = pos + std::string(marker).size();
+  }
+  return true;
+}
+
+int ExpectDaemonOwnershipOrder() {
+  std::ifstream source(std::string(OPCUA_SOURCE_DIR) +
+                       "/src/daemon/opcua_server.cc");
+  if (int rc = Expect(source.good(), "failed to open opcua_server.cc")) {
+    return rc;
+  }
+  std::ostringstream buffer;
+  buffer << source.rdbuf();
+  const std::string text = buffer.str();
+
+  return Expect(
+      ContainsInOrder(text, {"RealtimeValueStore value_store;",
+                             "const ValueSlotId slot = value_store.AddSlot",
+                             "RealtimeAddressSpace address_space(&value_store);",
+                             "ServerPtr server(UA_Server_new());",
+                             "ServerShutdown shutdown(server.get());",
+                             "std::optional<MqttAdapter> mqtt_adapter;"}),
+      "daemon realtime ownership/destruction declaration order regressed");
+}
+
 }  // namespace
 
 int main() {
+  if (int rc = ExpectDaemonOwnershipOrder()) return rc;
+
   const std::string db_path = "daemon_smoke_test.db";
   DatabaseCleanup cleanup(db_path);
 
