@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 project(opcua_server_opensource LANGUAGES C CXX)
 
 option(OPCUA_BUILD_TESTS "Build tests" ON)
+option(OPCUA_MQTT_INTEGRATION_TESTS "Build Mosquitto-backed MQTT integration test" OFF)
+set(MOSQUITTO_EXECUTABLE "" CACHE FILEPATH "Path to the Mosquitto broker executable for MQTT integration tests")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -90,6 +92,14 @@ opcua_target_warnings(opcua-supervisor)
 
 if(OPCUA_BUILD_TESTS)
   enable_testing()
+
+  if(OPCUA_MQTT_INTEGRATION_TESTS)
+    if(NOT MOSQUITTO_EXECUTABLE OR NOT EXISTS "${MOSQUITTO_EXECUTABLE}")
+      message(FATAL_ERROR
+        "OPCUA_MQTT_INTEGRATION_TESTS requires MOSQUITTO_EXECUTABLE to point to a Mosquitto executable")
+    endif()
+  endif()
+
   add_executable(config_validation_test
     tests/config_validation_test.cc
   )
@@ -144,6 +154,24 @@ if(OPCUA_BUILD_TESTS)
   target_link_libraries(mqtt_adapter_test PRIVATE opcua_daemon_lib)
   opcua_target_warnings(mqtt_adapter_test)
   add_test(NAME mqtt_adapter_test COMMAND mqtt_adapter_test)
+
+  if(OPCUA_MQTT_INTEGRATION_TESTS)
+    add_executable(mqtt_integration_test
+      tests/mqtt_integration_test.cc
+    )
+    target_link_libraries(mqtt_integration_test PRIVATE
+      opcua_daemon_lib
+      opcua_supervisor_lib
+      paho-mqtt3a-static
+    )
+    opcua_target_warnings(mqtt_integration_test)
+    add_test(NAME mqtt_integration_test
+      COMMAND mqtt_integration_test
+        "${MOSQUITTO_EXECUTABLE}"
+        $<TARGET_FILE:opcua-daemon>
+    )
+    set_tests_properties(mqtt_integration_test PROPERTIES TIMEOUT 30)
+  endif()
 
   add_executable(realtime_address_space_test
     tests/realtime_address_space_test.cc

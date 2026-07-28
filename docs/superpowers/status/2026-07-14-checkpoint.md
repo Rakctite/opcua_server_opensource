@@ -33,3 +33,10 @@
 
 - The working branch is `feature/opcua-integrated-server`.
 - This checkpoint intentionally preserves the current state for a later resume instead of expanding scope now.
+
+## MQTT MVP Update
+
+- Added the MQTT realtime value-store MVP through Task 10 on branch `feature/realtime-value-store-mqtt-mvp`.
+- Added an opt-in Mosquitto end-to-end integration test target for Task 11. The target is disabled by default and requires `OPCUA_MQTT_INTEGRATION_TESTS=ON` plus a valid `MOSQUITTO_EXECUTABLE`.
+- The integration harness is intended to run a real Mosquitto broker, configure SQLite for an enabled MQTT double mapping, start `opcua-daemon`, publish through Paho MQTTAsync, read and subscribe through open62541, verify read-only OPC UA writes are rejected, and cover broker loss/reconnect quality transitions.
+- The harness depends on an external Mosquitto executable. If Mosquitto is absent, only default builds/tests and the opt-in configure failure path can be verified locally.
