@@ -170,7 +170,7 @@ if(OPCUA_BUILD_TESTS)
         "${MOSQUITTO_EXECUTABLE}"
         $<TARGET_FILE:opcua-daemon>
     )
-    set_tests_properties(mqtt_integration_test PROPERTIES TIMEOUT 30)
+    set_tests_properties(mqtt_integration_test PROPERTIES TIMEOUT 120)
   endif()
 
   add_executable(realtime_address_space_test

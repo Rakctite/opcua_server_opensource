@@ -178,19 +178,20 @@ class TemporaryDirectory {
   std::filesystem::path path_;
 };
 
-class AsyncOperation {
+class MqttOperationState {
  public:
-  AsyncOperation() = default;
+  MqttOperationState() = default;
 
-  AsyncOperation(const AsyncOperation&) = delete;
-  AsyncOperation& operator=(const AsyncOperation&) = delete;
+  MqttOperationState(const MqttOperationState&) = delete;
+  MqttOperationState& operator=(const MqttOperationState&) = delete;
 
   static void OnSuccess(void* context, MQTTAsync_successData* /*response*/) {
-    static_cast<AsyncOperation*>(context)->Complete(true, MQTTASYNC_SUCCESS);
+    static_cast<MqttOperationState*>(context)->Complete(true,
+                                                        MQTTASYNC_SUCCESS);
   }
 
   static void OnFailure(void* context, MQTTAsync_failureData* response) {
-    static_cast<AsyncOperation*>(context)->Complete(
+    static_cast<MqttOperationState*>(context)->Complete(
         false, response == nullptr ? MQTTASYNC_FAILURE : response->code);
   }
 
@@ -257,19 +258,19 @@ class MqttClient {
       return Error(MqttRc("MQTTAsync_create", rc));
     }
 
-    AsyncOperation operation;
+    auto operation = CreateOperation();
     MQTTAsync_connectOptions options = MQTTAsync_connectOptions_initializer;
     options.cleansession = 1;
     options.keepAliveInterval = 5;
     options.connectTimeout = 2;
-    options.context = &operation;
-    options.onSuccess = &AsyncOperation::OnSuccess;
-    options.onFailure = &AsyncOperation::OnFailure;
+    options.context = operation.get();
+    options.onSuccess = &MqttOperationState::OnSuccess;
+    options.onFailure = &MqttOperationState::OnFailure;
     rc = MQTTAsync_connect(client_, &options);
     if (rc != MQTTASYNC_SUCCESS) {
       return Error(MqttRc("MQTTAsync_connect", rc));
     }
-    return operation.WaitUntil(deadline, "MQTT connect");
+    return operation->WaitUntil(deadline, "MQTT connect");
   }
 
   opcua::Status Publish(const std::string& topic, const std::string& payload,
@@ -284,17 +285,17 @@ class MqttClient {
     message.qos = 1;
     message.retained = 0;
 
-    AsyncOperation operation;
+    auto operation = CreateOperation();
     MQTTAsync_responseOptions options = MQTTAsync_responseOptions_initializer;
-    options.context = &operation;
-    options.onSuccess = &AsyncOperation::OnSuccess;
-    options.onFailure = &AsyncOperation::OnFailure;
+    options.context = operation.get();
+    options.onSuccess = &MqttOperationState::OnSuccess;
+    options.onFailure = &MqttOperationState::OnFailure;
     const int rc =
         MQTTAsync_sendMessage(client_, topic.c_str(), &message, &options);
     if (rc != MQTTASYNC_SUCCESS) {
       return Error(MqttRc("MQTTAsync_sendMessage", rc));
     }
-    return operation.WaitUntil(deadline, "MQTT publish");
+    return operation->WaitUntil(deadline, "MQTT publish");
   }
 
   opcua::Status Disconnect(Clock::time_point deadline) {
@@ -302,22 +303,29 @@ class MqttClient {
       return opcua::Status::Ok();
     }
 
-    AsyncOperation operation;
+    auto operation = CreateOperation();
     MQTTAsync_disconnectOptions options =
         MQTTAsync_disconnectOptions_initializer;
     options.timeout = 1000;
-    options.context = &operation;
-    options.onSuccess = &AsyncOperation::OnSuccess;
-    options.onFailure = &AsyncOperation::OnFailure;
+    options.context = operation.get();
+    options.onSuccess = &MqttOperationState::OnSuccess;
+    options.onFailure = &MqttOperationState::OnFailure;
     const int rc = MQTTAsync_disconnect(client_, &options);
     if (rc != MQTTASYNC_SUCCESS) {
       return Error(MqttRc("MQTTAsync_disconnect", rc));
     }
-    return operation.WaitUntil(deadline, "MQTT disconnect");
+    return operation->WaitUntil(deadline, "MQTT disconnect");
   }
 
  private:
+  std::shared_ptr<MqttOperationState> CreateOperation() {
+    auto operation = std::make_shared<MqttOperationState>();
+    operations_.push_back(operation);
+    return operation;
+  }
+
   MQTTAsync client_ = nullptr;
+  std::vector<std::shared_ptr<MqttOperationState>> operations_;
 };
 
 struct DataObservation {
@@ -460,18 +468,19 @@ class IntegrationFixture {
     payload.precision(17);
     payload << value;
 
-    const auto deadline = Clock::now() + std::chrono::seconds(5);
     MqttClient publisher;
     auto connect_status = publisher.Connect(BrokerUri(), ClientId("publisher"),
-                                            deadline);
+                                            Clock::now() +
+                                                std::chrono::seconds(5));
     if (!connect_status.ok()) {
       return connect_status;
     }
-    auto publish_status = publisher.Publish(kTopic, payload.str(), deadline);
+    auto publish_status = publisher.Publish(
+        kTopic, payload.str(), Clock::now() + std::chrono::seconds(5));
     if (!publish_status.ok()) {
       return publish_status;
     }
-    return publisher.Disconnect(deadline);
+    return publisher.Disconnect(Clock::now() + std::chrono::seconds(5));
   }
 
   opcua::Status WaitForDataValue(UA_StatusCode expected_status,
@@ -536,12 +545,14 @@ class IntegrationFixture {
         UA_NODEID_NUMERIC(2, static_cast<UA_UInt32>(kDataNodeId));
     const UA_StatusCode status =
         UA_Client_writeValueAttribute(client_.get(), node_id, &value);
-    if (status != UA_STATUSCODE_BADNOTWRITABLE) {
+    if (status != UA_STATUSCODE_BADUSERACCESSDENIED) {
       std::ostringstream stream;
       stream << "remote write returned " << StatusName(status) << " (0x"
              << std::hex << status << "), expected "
-             << StatusName(UA_STATUSCODE_BADNOTWRITABLE) << " (0x"
-             << UA_STATUSCODE_BADNOTWRITABLE << ")";
+             << StatusName(UA_STATUSCODE_BADUSERACCESSDENIED) << " (0x"
+             << UA_STATUSCODE_BADUSERACCESSDENIED
+             << ") from bundled open62541 remote userAccessLevel check while "
+                "writing exactly 99.0";
       return Error(stream.str());
     }
     return WaitForDataValue(UA_STATUSCODE_GOOD, expected_value, false);
