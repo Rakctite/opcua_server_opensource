@@ -530,14 +530,19 @@ class IntegrationFixture {
   opcua::Status VerifyRemoteWriteRejected(double expected_value) {
     UA_Variant value;
     UA_Variant_init(&value);
-    UA_Double scalar = 1234.5;
+    UA_Double scalar = 99.0;
     UA_Variant_setScalar(&value, &scalar, &UA_TYPES[UA_TYPES_DOUBLE]);
     const UA_NodeId node_id =
         UA_NODEID_NUMERIC(2, static_cast<UA_UInt32>(kDataNodeId));
     const UA_StatusCode status =
         UA_Client_writeValueAttribute(client_.get(), node_id, &value);
-    if (!UA_StatusCode_isBad(status)) {
-      return Error("remote write unexpectedly succeeded");
+    if (status != UA_STATUSCODE_BADNOTWRITABLE) {
+      std::ostringstream stream;
+      stream << "remote write returned " << StatusName(status) << " (0x"
+             << std::hex << status << "), expected "
+             << StatusName(UA_STATUSCODE_BADNOTWRITABLE) << " (0x"
+             << UA_STATUSCODE_BADNOTWRITABLE << ")";
+      return Error(stream.str());
     }
     return WaitForDataValue(UA_STATUSCODE_GOOD, expected_value, false);
   }
