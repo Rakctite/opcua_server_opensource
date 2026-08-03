@@ -58,7 +58,7 @@ using Clock = std::chrono::steady_clock;
 constexpr int kFirstMqttPort = 18883;
 constexpr int kFirstOpcuaPort = 48450;
 constexpr int kPortCount = 10;
-constexpr std::uint32_t kDataNodeId = 6001;
+constexpr std::uint32_t kDataNodeId = 1001;
 constexpr char kTopic[] = "opcua/integration/value";
 constexpr UA_StatusCode kUnavailableStatus =
     UA_STATUSCODE_UNCERTAINNOCOMMUNICATIONLASTUSABLEVALUE;
@@ -324,6 +324,8 @@ struct DataObservation {
   UA_StatusCode status = UA_STATUSCODE_BADINTERNALERROR;
   bool has_value = false;
   double value = 0.0;
+  bool has_source_timestamp = false;
+  UA_DateTime source_timestamp = 0;
 };
 
 struct Notification {
@@ -473,14 +475,16 @@ class IntegrationFixture {
   }
 
   opcua::Status WaitForDataValue(UA_StatusCode expected_status,
-                                 double expected_value) {
+                                 double expected_value,
+                                 bool require_source_timestamp) {
     const auto deadline = Clock::now() + std::chrono::seconds(8);
     while (Clock::now() < deadline) {
       auto observation = ReadDataNode();
       if (!observation.ok()) {
         return observation.status();
       }
-      if (Matches(observation.value(), expected_status, expected_value)) {
+      if (Matches(observation.value(), expected_status, expected_value,
+                  require_source_timestamp)) {
         return opcua::Status::Ok();
       }
       UA_Client_run_iterate(client_.get(), 20);
@@ -495,7 +499,9 @@ class IntegrationFixture {
              << "; last status "
              << StatusName(final_observation.value().status)
              << " has_value=" << final_observation.value().has_value
-             << " value=" << final_observation.value().value;
+             << " value=" << final_observation.value().value
+             << " has_source_timestamp="
+             << final_observation.value().has_source_timestamp;
       return Error(stream.str());
     }
     return Error(DeadlineMessage("OPC UA data value wait"));
@@ -521,7 +527,7 @@ class IntegrationFixture {
     return Error(DeadlineMessage("OPC UA data-change notification wait"));
   }
 
-  opcua::Status VerifyRemoteWriteRejected() {
+  opcua::Status VerifyRemoteWriteRejected(double expected_value) {
     UA_Variant value;
     UA_Variant_init(&value);
     UA_Double scalar = 1234.5;
@@ -533,7 +539,7 @@ class IntegrationFixture {
     if (!UA_StatusCode_isBad(status)) {
       return Error("remote write unexpectedly succeeded");
     }
-    return WaitForDataValue(UA_STATUSCODE_GOOD, 42.5);
+    return WaitForDataValue(UA_STATUSCODE_GOOD, expected_value, false);
   }
 
   opcua::Status StopBroker() {
@@ -727,6 +733,10 @@ class IntegrationFixture {
     if (observation.has_value) {
       observation.value = *static_cast<const UA_Double*>(value.value.data);
     }
+    observation.has_source_timestamp = value.hasSourceTimestamp;
+    if (observation.has_source_timestamp) {
+      observation.source_timestamp = value.sourceTimestamp;
+    }
     UA_ReadResponse_clear(&response);
     return observation;
   }
@@ -770,9 +780,11 @@ class IntegrationFixture {
   }
 
   static bool Matches(const DataObservation& observation,
-                      UA_StatusCode expected_status, double expected_value) {
+                      UA_StatusCode expected_status, double expected_value,
+                      bool require_source_timestamp) {
     return observation.status == expected_status && observation.has_value &&
-           std::fabs(observation.value - expected_value) < 0.000001;
+           std::fabs(observation.value - expected_value) < 0.000001 &&
+           (!require_source_timestamp || observation.has_source_timestamp);
   }
 
   static bool Matches(const Notification& notification,
@@ -809,42 +821,49 @@ int RunScenario(IntegrationFixture& fixture) {
   if (int rc = run("StartBroker", fixture.StartBroker())) return rc;
   if (int rc = run("ConfigureDatabase", fixture.ConfigureDatabase())) return rc;
   if (int rc = run("StartDaemon", fixture.StartDaemon())) return rc;
-  if (int rc = run("PublishDouble initial", fixture.PublishDouble(42.5))) {
+  if (int rc = run("PublishDouble initial", fixture.PublishDouble(37.5))) {
     return rc;
   }
   if (int rc = run("WaitForDataValue Good",
-                   fixture.WaitForDataValue(UA_STATUSCODE_GOOD, 42.5))) {
+                   fixture.WaitForDataValue(UA_STATUSCODE_GOOD, 37.5, true))) {
     return rc;
   }
   if (int rc = run("WaitForNotification Good",
-                   fixture.WaitForNotification(UA_STATUSCODE_GOOD, 42.5))) {
+                   fixture.WaitForNotification(UA_STATUSCODE_GOOD, 37.5))) {
     return rc;
   }
   if (int rc = run("VerifyRemoteWriteRejected",
-                   fixture.VerifyRemoteWriteRejected())) {
+                   fixture.VerifyRemoteWriteRejected(37.5))) {
+    return rc;
+  }
+  if (int rc = run("PublishDouble update", fixture.PublishDouble(38.0))) {
+    return rc;
+  }
+  if (int rc = run("WaitForNotification Good update",
+                   fixture.WaitForNotification(UA_STATUSCODE_GOOD, 38.0))) {
     return rc;
   }
   if (int rc = run("StopBroker", fixture.StopBroker())) return rc;
   if (int rc = run("WaitForDataValue Uncertain",
-                   fixture.WaitForDataValue(kUnavailableStatus, 42.5))) {
+                   fixture.WaitForDataValue(kUnavailableStatus, 38.0, false))) {
     return rc;
   }
   if (int rc =
           run("WaitForNotification Uncertain",
-              fixture.WaitForNotification(kUnavailableStatus, 42.5))) {
+              fixture.WaitForNotification(kUnavailableStatus, 38.0))) {
     return rc;
   }
   if (int rc = run("RestartBroker", fixture.RestartBroker())) return rc;
   if (int rc = run("PublishDouble after restart",
-                   fixture.PublishDouble(42.5))) {
+                   fixture.PublishDouble(38.0))) {
     return rc;
   }
   if (int rc = run("WaitForDataValue Good after restart",
-                   fixture.WaitForDataValue(UA_STATUSCODE_GOOD, 42.5))) {
+                   fixture.WaitForDataValue(UA_STATUSCODE_GOOD, 38.0, false))) {
     return rc;
   }
   if (int rc = run("WaitForNotification Good after restart",
-                   fixture.WaitForNotification(UA_STATUSCODE_GOOD, 42.5))) {
+                   fixture.WaitForNotification(UA_STATUSCODE_GOOD, 38.0))) {
     return rc;
   }
   fixture.StopAll();
